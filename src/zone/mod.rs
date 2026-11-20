@@ -5,7 +5,8 @@
 
 use bevy::prelude::*;
 
-use crate::states::AppState;
+use crate::player::{Player, Respawn};
+use crate::states::{AppState, InGamePhase};
 use crate::world::{Collider, Pillar, Terrain};
 
 pub struct ZonePlugin;
@@ -29,6 +30,10 @@ pub struct Anomaly;
 const ARTIFACT_SHAPE: &[Pillar] = &[Pillar::centered(0.2, 0.4)];
 const ANOMALY_SHAPE: &[Pillar] = &[Pillar::centered(0.4, 1.2)];
 
+/// Horizontal distance between the stalker and an anomaly's axis at which
+/// it is touched: anomaly radius, body radius, and a hand's breadth.
+const ANOMALY_TOUCH: f32 = 0.4 + 0.35 + 0.1;
+
 /// Root marker for everything spawned by this plugin's OnEnter.
 #[derive(Component)]
 struct ZoneRoot;
@@ -37,7 +42,11 @@ impl Plugin for ZonePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ZoneRun>()
             .add_systems(OnEnter(AppState::InGame), spawn_zone_objects)
-            .add_systems(OnExit(AppState::InGame), despawn_zone_objects);
+            .add_systems(OnExit(AppState::InGame), despawn_zone_objects)
+            .add_systems(
+                Update,
+                trigger_anomalies.run_if(in_state(InGamePhase::Running)),
+            );
     }
 }
 
@@ -101,6 +110,27 @@ fn spawn_zone_objects(
     }
 }
 
+/// Touching an anomaly kills the stalker, who wakes up back at base.
+fn trigger_anomalies(
+    mut run: ResMut<ZoneRun>,
+    mut respawns: MessageWriter<Respawn>,
+    players: Query<&Transform, With<Player>>,
+    anomalies: Query<&GlobalTransform, With<Anomaly>>,
+) {
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let feet = player.translation;
+    let touched = anomalies.iter().any(|anomaly| {
+        let center = anomaly.translation();
+        feet.xz().distance(center.xz()) <= ANOMALY_TOUCH && (feet.y - center.y).abs() < 1.5
+    });
+    if touched {
+        run.anomalies_triggered += 1;
+        respawns.write(Respawn);
+    }
+}
+
 fn despawn_zone_objects(mut commands: Commands, roots: Query<Entity, With<ZoneRoot>>) {
     for root in &roots {
         commands.entity(root).despawn();
@@ -116,5 +146,31 @@ mod tests {
         let run = ZoneRun::default();
         assert_eq!(run.artifacts_collected, 0);
         assert_eq!(run.anomalies_triggered, 0);
+    }
+
+    #[test]
+    fn touching_an_anomaly_sends_the_stalker_back_to_base() {
+        let mut app = App::new();
+        app.init_resource::<ZoneRun>()
+            .add_message::<Respawn>()
+            .add_systems(Update, trigger_anomalies);
+        let anomaly = GlobalTransform::from_xyz(0.0, 0.6, 0.0);
+        app.world_mut().spawn((Anomaly, anomaly));
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::from_xyz(5.0, 0.0, 0.0)))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<ZoneRun>().anomalies_triggered, 0);
+
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player")
+            .translation
+            .x = 0.75;
+        app.update();
+        assert_eq!(app.world().resource::<ZoneRun>().anomalies_triggered, 1);
+        let respawns = app.world().resource::<Messages<Respawn>>();
+        assert_eq!(respawns.len(), 1);
     }
 }

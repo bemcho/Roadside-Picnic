@@ -1,6 +1,6 @@
-//! Stands of dead trees scattered across the Zone: groves and clearings on a
-//! jittered grid, placed deterministically from the terrain's woodland
-//! suitability. Each model is a whole stand of trunks and fallen logs.
+//! Fauna and vegetation clusters scattered across the Zone: groves and
+//! clearings on a jittered grid, placed deterministically from the terrain's
+//! woodland suitability.
 
 use std::f32::consts::TAU;
 
@@ -41,13 +41,20 @@ const ROOT_SINK: f32 = 0.15;
 /// is sunk so none of them floats.
 const GROUND_CONTACT: f32 = 0.01;
 
-/// Dead-tree stand models and their collision pillars, measured by
-/// tools/trim_tree_base.py.
-const MODELS: [(&str, &[Pillar]); 2] = [
-    (assets::TREE_TALL, include!("tree_pillars/tall_tree.rs")),
+/// Extracted fauna models and their collision pillars.
+const MODELS: [(&str, &[Pillar]); 4] = [
     (
-        assets::TREE_ROADSIDE,
-        include!("tree_pillars/roadside_tree.rs"),
+        assets::FAUNA_DEAD_FOREST,
+        include!("pillars/fauna_dead_forest.rs"),
+    ),
+    (
+        assets::FAUNA_OVERGROWTH,
+        include!("pillars/fauna_overgrowth.rs"),
+    ),
+    (assets::FAUNA_MUD_BOG, include!("pillars/fauna_mud_bog.rs")),
+    (
+        assets::FAUNA_SLIME_DITCH,
+        include!("pillars/fauna_slime_ditch.rs"),
     ),
 ];
 
@@ -82,7 +89,7 @@ pub(super) fn tree_sites(terrain: &Terrain) -> Vec<TreeSite> {
                 continue;
             }
 
-            let model = (roll(3) * MODELS.len() as f32) as usize % MODELS.len();
+            let model = (roll(3) * MODELS.len() as f32) as usize;
             let scale = SCALE_RANGE.0 + (SCALE_RANGE.1 - SCALE_RANGE.0) * roll(4);
             let rotation = Quat::from_rotation_y(roll(5) * TAU);
             let contacts = ground_contacts(MODELS[model].1)
@@ -128,8 +135,8 @@ fn footprint_base(
     (high - low <= MAX_FOOTPRINT_RISE).then_some(low)
 }
 
-/// Spawns every stand as a child of `parent`, sharing one scene per model,
-/// each solid through its model's pillars.
+/// Spawns every fauna cluster as a child of `parent`, sharing one scene and
+/// using its pillars for collision.
 pub(super) fn spawn_trees(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -161,7 +168,19 @@ mod tests {
         let sites = tree_sites(&terrain);
         assert_eq!(sites, tree_sites(&terrain));
         assert!((25..=90).contains(&sites.len()), "{} stands", sites.len());
-        assert!(sites.iter().any(|s| s.model == 0) && sites.iter().any(|s| s.model == 1));
+        assert!(
+            sites
+                .iter()
+                .all(|site| { (SCALE_RANGE.0..=SCALE_RANGE.1).contains(&site.transform.scale.x) })
+        );
+        for model in 0..MODELS.len() {
+            assert!(sites.iter().any(|site| site.model == model));
+            assert!(
+                ground_contacts(MODELS[model].1).next().is_some(),
+                "{} has no ground contacts",
+                MODELS[model].0
+            );
+        }
     }
 
     #[test]
@@ -169,7 +188,10 @@ mod tests {
         let terrain = Terrain::new();
         for site in tree_sites(&terrain) {
             let p = site.transform.translation;
-            assert!(p.xz().length() >= SPAWN_CLEARING, "stand at spawn {p}");
+            assert!(
+                p.xz().distance(Vec2::from(SPAWN)) >= SPAWN_CLEARING,
+                "stand at spawn {p}"
+            );
             assert!(
                 terrain.woodland_at(p.x, p.z) > 0.0,
                 "stand on barren ground {p}"

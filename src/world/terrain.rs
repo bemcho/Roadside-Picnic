@@ -43,8 +43,14 @@ const ROAD_START: (f32, f32) = (0.0, 0.0);
 const ROAD_END: (f32, f32) = (36.0, 20.0);
 const ROAD_HALF_WIDTH: f32 = 5.0;
 
-/// Stalker spawn point, at the road head.
-pub const SPAWN: (f32, f32) = (0.0, 0.0);
+/// The stalkers' base: an old industrial hangar on the south edge, on a
+/// levelled pad (wide enough for the whole hall) that fades back into the hills.
+pub const BASE: (f32, f32) = (40.0, -128.0);
+const BASE_PAD_RADIUS: f32 = 27.0;
+const BASE_PAD_BLEND: f32 = 12.0;
+
+/// Where the stalker starts and respawns: inside the hangar, by its door.
+pub const SPAWN: (f32, f32) = (40.0, -114.0);
 
 /// Deterministic terrain model. Pure math until [`Terrain::build_mesh`] is
 /// called — insert as a resource so any system can sample the ground.
@@ -93,7 +99,16 @@ impl Terrain {
             + self.hills(ROAD_END.0, ROAD_END.1) * t;
         h += road_mask * (ramp_h - h) * 0.85;
 
+        // Base: levelled flat for the yard.
+        h += self.base_mask(x, z) * (self.hills(BASE.0, BASE.1) - h);
+
         h
+    }
+
+    /// 1.0 on the base's levelled pad, fading to 0.0 around it.
+    fn base_mask(&self, x: f32, z: f32) -> f32 {
+        let distance = Vec2::new(x - BASE.0, z - BASE.1).length();
+        smoothstep(BASE_PAD_RADIUS + BASE_PAD_BLEND, BASE_PAD_RADIUS, distance)
     }
 
     /// Rolling hills: fractal value noise, no external crates.
@@ -133,7 +148,8 @@ impl Terrain {
     }
 
     /// How readily trees grow at `(x, z)`, from 0.0 (never) to 1.0: none on
-    /// the road, in the quarry, or on steep ground; few on the scorched hill.
+    /// the road, in the quarry, at the base, or on steep ground; few on the
+    /// scorched hill.
     pub fn woodland_at(&self, x: f32, z: f32) -> f32 {
         let qdx = (x - QUARRY_CENTER.0) / QUARRY_RADII.0;
         let qdz = (z - QUARRY_CENTER.1) / QUARRY_RADII.1;
@@ -147,7 +163,9 @@ impl Terrain {
         let flat_enough = smoothstep(0.7, 0.4, normal.xz().length() / normal.y);
         let off_road = 1.0 - smoothstep(0.05, 0.3, self.road_mask(x, z));
 
-        outside_quarry * flat_enough * off_road * (1.0 - 0.85 * ash)
+        let off_base = 1.0 - self.base_mask(x, z);
+
+        outside_quarry * flat_enough * off_road * off_base * (1.0 - 0.85 * ash)
     }
 
     /// Shader data, not a tint: exposed earth, wetness, ash, macro variation.
@@ -167,7 +185,8 @@ impl Terrain {
         let exposed = smoothstep(0.35, 0.85, slope)
             .max(self.road_mask(x, z))
             .max(quarry)
-            .max(ash * 0.95);
+            .max(ash * 0.95)
+            .max(self.base_mask(x, z));
         let wetness = marsh.max(smoothstep(2.5, -1.0, h) * 0.3);
         let variation = lerp(0.82, 1.12, value_noise(x * 0.08, z * 0.08, SEED + 5));
         [exposed, wetness, ash, variation]
@@ -390,6 +409,17 @@ mod tests {
             for channel in 0..4 {
                 assert!((before[channel] - after[channel]).abs() < 0.01);
             }
+        }
+    }
+
+    #[test]
+    fn base_stands_on_a_level_pad_clear_of_trees() {
+        let terrain = Terrain::new();
+        let level = terrain.height_at(BASE.0, BASE.1);
+        for (dx, dz) in [(-17.5, -19.5), (17.5, 19.5), (0.0, 22.0), (-10.0, 12.0)] {
+            let h = terrain.height_at(BASE.0 + dx, BASE.1 + dz);
+            assert!((h - level).abs() < 1e-4, "pad not level at ({dx}, {dz})");
+            assert_eq!(terrain.woodland_at(BASE.0 + dx, BASE.1 + dz), 0.0);
         }
     }
 }

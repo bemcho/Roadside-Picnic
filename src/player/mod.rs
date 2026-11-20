@@ -73,6 +73,10 @@ pub struct Locomotion {
     pub gait: Gait,
 }
 
+/// Sends the stalker back to base, as after dying in the Zone.
+#[derive(Message)]
+pub struct Respawn;
+
 /// Tags the camera that follows the stalker.
 #[derive(Component)]
 #[require(OrbitCamera)]
@@ -83,13 +87,15 @@ type PlayerEntities<'w, 's> = Query<'w, 's, Entity, Or<(With<Player>, With<Playe
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_stalker_animations)
+        app.add_message::<Respawn>()
+            .add_systems(Startup, load_stalker_animations)
             .add_systems(OnEnter(AppState::InGame), spawn_player)
             .add_systems(OnExit(AppState::InGame), despawn_player)
             .add_systems(
                 Update,
                 (
                     orbit_camera,
+                    respawn_player,
                     move_player,
                     follow_player,
                     animate_stalker,
@@ -104,11 +110,22 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain: Res<Terrain>) {
-    let spawn = Vec3::new(SPAWN.0, terrain.height_at(SPAWN.0, SPAWN.1), SPAWN.1);
+/// Camera yaw at the start of a run: behind the stalker, looking north out
+/// of the hangar door into the Zone.
+const SPAWN_YAW: f32 = PI;
 
-    // The stalker: rigged glTF model from assets/models/stalker.glb, facing
-    // away from the camera at spawn. Its origin is at the soles of its feet.
+/// Where the stalker stands at the start of a run and after respawning:
+/// inside the base by its door, facing out (model +Z) and away from the camera.
+fn spawn_transform(terrain: &Terrain) -> Transform {
+    let spawn = Vec3::new(SPAWN.0, terrain.height_at(SPAWN.0, SPAWN.1), SPAWN.1);
+    Transform::from_translation(spawn)
+}
+
+fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain: Res<Terrain>) {
+    // The stalker: rigged glTF model from assets/models/stalker.glb. Its
+    // origin is at the soles of its feet.
+    let start = spawn_transform(&terrain);
+    let spawn = start.translation;
     let player = commands
         .spawn((
             Player::default(),
@@ -116,7 +133,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
                 grounded: true,
                 ..default()
             },
-            Transform::from_translation(spawn).with_rotation(Quat::from_rotation_y(PI)),
+            start,
             Visibility::default(),
         ))
         .id();
@@ -131,7 +148,10 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
 
     // Camera orbiting behind the stalker. The sky and haze come from the
     // world's atmosphere, which needs HDR at sunlight exposure.
-    let orbit = OrbitCamera::default();
+    let orbit = OrbitCamera {
+        yaw: SPAWN_YAW,
+        ..default()
+    };
     let focus = spawn + Vec3::Y * LOOK_HEIGHT;
     commands.spawn((
         PlayerCamera,
@@ -149,6 +169,28 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
 fn despawn_player(mut commands: Commands, player_entities: PlayerEntities) {
     for entity in &player_entities {
         commands.entity(entity).despawn();
+    }
+}
+
+/// Puts the stalker back at the base, standing, with the camera behind.
+fn respawn_player(
+    mut respawns: MessageReader<Respawn>,
+    terrain: Res<Terrain>,
+    mut players: Query<(&mut Transform, &mut Locomotion), With<Player>>,
+    mut cameras: Query<&mut OrbitCamera>,
+) {
+    if respawns.read().count() == 0 {
+        return;
+    }
+    for (mut transform, mut locomotion) in &mut players {
+        *transform = spawn_transform(&terrain);
+        *locomotion = Locomotion {
+            grounded: true,
+            ..default()
+        };
+    }
+    for mut orbit in &mut cameras {
+        orbit.yaw = SPAWN_YAW;
     }
 }
 
@@ -440,5 +482,23 @@ mod tests {
             (travelled - crawl_speed * 39.0 * 0.05).abs() < 1e-3,
             "{travelled} m"
         );
+    }
+
+    #[test]
+    fn respawn_returns_the_stalker_to_base() {
+        let (mut app, player) = moving_app(&[]);
+        app.add_message::<Respawn>()
+            .add_systems(Update, respawn_player.before(move_player));
+        app.world_mut()
+            .get_mut::<Locomotion>(player)
+            .expect("locomotion")
+            .gait = Gait::Crawl;
+        app.world_mut().write_message(Respawn);
+        app.update();
+        let at = feet(&app, player);
+        let terrain = Terrain::new();
+        assert_eq!(at, spawn_transform(&terrain).translation);
+        let locomotion = app.world().get::<Locomotion>(player).expect("locomotion");
+        assert_eq!((locomotion.gait, locomotion.grounded), (Gait::Idle, true));
     }
 }

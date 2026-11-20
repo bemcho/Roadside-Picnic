@@ -37,21 +37,28 @@ impl MaterialExtension for GroundLayers {
     }
 }
 
+/// Loads a tiling texture: repeating, anisotropically filtered.
+pub(super) fn load_repeating(
+    server: &AssetServer,
+    path: &'static str,
+    is_srgb: bool,
+) -> Handle<Image> {
+    server
+        .load_builder()
+        .with_settings(move |settings: &mut ImageLoaderSettings| {
+            settings.is_srgb = is_srgb;
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                anisotropy_clamp: 8,
+                ..ImageSamplerDescriptor::linear()
+            });
+        })
+        .load(path)
+}
+
 pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
-    let load = |path: &'static str, is_srgb: bool| {
-        server
-            .load_builder()
-            .with_settings(move |settings: &mut ImageLoaderSettings| {
-                settings.is_srgb = is_srgb;
-                settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                    address_mode_u: ImageAddressMode::Repeat,
-                    address_mode_v: ImageAddressMode::Repeat,
-                    anisotropy_clamp: 8,
-                    ..ImageSamplerDescriptor::linear()
-                });
-            })
-            .load(path)
-    };
+    let load = |path, is_srgb| load_repeating(server, path, is_srgb);
     TerrainMaterial {
         base: StandardMaterial {
             perceptual_roughness: 1.0,
@@ -68,27 +75,25 @@ pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
     }
 }
 
-pub(super) fn prepare_ground_textures(
-    materials: Res<Assets<TerrainMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-) {
-    for (_, material) in materials.iter() {
-        let layers = &material.extension;
-        for handle in [
-            &layers.grass_albedo,
-            &layers.grass_normal,
-            &layers.grass_arm,
-            &layers.earth_albedo,
-            &layers.earth_normal,
-            &layers.earth_arm,
-        ] {
-            if images
-                .get(handle)
-                .is_some_and(|image| image.texture_descriptor.mip_level_count == 1)
-                && let Some(mut image) = images.get_mut(handle)
-            {
-                generate_mipmaps(&mut image);
-            }
+/// Gives every tiling (repeat-sampled) texture a mip chain once it loads:
+/// the loader doesn't, and distant tiling surfaces shimmer without one.
+pub(super) fn mipmap_tiling_textures(mut images: ResMut<Assets<Image>>) {
+    let pending: Vec<_> = images
+        .iter()
+        .filter(|(_, image)| {
+            image.texture_descriptor.mip_level_count == 1
+                && image.data.is_some()
+                && matches!(
+                    &image.sampler,
+                    ImageSampler::Descriptor(sampler)
+                        if sampler.address_mode_u == ImageAddressMode::Repeat
+                )
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for id in pending {
+        if let Some(mut image) = images.get_mut(id) {
+            generate_mipmaps(&mut image);
         }
     }
 }

@@ -27,13 +27,24 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   bald hill, a marshy lowland, and a dirt road to the quarry rim. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
   in other plugins.
-- **Trees** (`src/world/trees.rs`): stands of dead trunks (`assets/models/trees/*.glb`)
-  scattered deterministically on a jittered grid, weighted by `Terrain::woodland_at`
-  (off-road, outside the quarry, flat-ish, sparse on the bald hill). Source GLBs are
-  dioramas on a dirt plinth: decimate with gltf-transform (`weld`, `simplify`, `resize`;
-  no meshopt/Draco), then trim the plinth with `tools/trim_tree_base.py`, which also
-  regenerates the model's collision pillars in `src/world/tree_pillars/<name>.rs`.
-  Re-run it whenever a model changes.
+- **Fauna** (`src/world/trees.rs`): four extracted, textured models
+  (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
+  weighted by `Terrain::woodland_at` (off-road, outside the quarry, flat-ish, sparse
+  on the bald hill). Rebuild them from the packed source with
+  `tools/prepare_fauna_asset.py <source.glb> assets/models/fauna assets/textures/fauna`
+  (run in headless Blender after `--`). It reuses the saved albedo, normal and
+  roughness PNGs; `--boards <image_3> <image_2> <image_1> <image_0>` recrops them
+  from the supplied reference sheets, without their labels. The forest uses
+  separate birch/petrified bark, and plants share the mud material at their bases.
+  Texture cards, material balls and miniature LOD previews are excluded, and
+  each extracted cluster is centered with its lowest point at ground level.
+  Regenerate each collision pillar file with `tools/trim_tree_base.py` whenever
+  the source geometry changes.
+- **Base** (`src/world/base.rs`): the stalkers' home, an industrial catwalk yard
+  (`assets/models/base/warehouse.glb`, Tripo, decimated like the trees) on a levelled
+  pad at `terrain::BASE` on the south edge. Runs start at `SPAWN` inside it, and a
+  `Respawn` message (sent when the stalker touches an anomaly) brings them back there.
+  Its pillars come from `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
 - **Collision** (`src/world/collision.rs`): every solid model carries a `Collider`, a
   set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
   of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed

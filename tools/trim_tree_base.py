@@ -1,15 +1,15 @@
-"""Trim the ground slab off a Tripo dead-tree stand and measure its collision pillars.
+"""Trim a Tripo model's ground slab and measure its collision pillars.
 
-The stands come as a group of trunks on a round dirt plinth. In game the trunks
-must grow straight out of the terrain, so everything below `cut` (a fraction of
-the model height) is removed and the model is lowered so the cut sits at y = 0.
+Models may contain multiple mesh objects. They are joined before trimming and
+collision sampling. Everything below `cut` (a fraction of model height) is
+removed and the model is lowered so the cut sits at y = 0.
 
-  blender -b --python tools/trim_tree_base.py -- raw.glb out.glb <cut> src/world/tree_pillars/<name>.rs
+  blender -b --python tools/trim_tree_base.py -- raw.glb out.glb <cut> src/world/pillars/<name>.rs
   npx @gltf-transform/cli@4 resize out.glb assets/models/trees/<name>.glb --width 1024 --height 1024
 
-Raw stands are first decimated (weld + simplify --ratio 0.008) with gltf-transform.
+Raw models may first be decimated with gltf-transform when needed.
 To re-measure an installed (already trimmed) stand without touching it:
-  blender -b --python tools/trim_tree_base.py -- assets/models/trees/<name>.glb - 0 src/world/tree_pillars/<name>.rs
+  blender -b --python tools/trim_tree_base.py -- assets/models/trees/<name>.glb - 0 src/world/pillars/<name>.rs
 
 The pillars file is a Rust array of `Pillar`s (glTF axes, model units): the
 stand's surface sampled into vertical columns on a PILLAR_CELL grid, each
@@ -26,7 +26,14 @@ MIN_TOP = 0.025
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=SRC)
-mesh = next(o for o in bpy.context.scene.objects if o.type == 'MESH')
+meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+mesh = meshes[0]
+if len(meshes) > 1:
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in meshes:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = mesh
+    bpy.ops.object.join()
 bpy.context.view_layer.objects.active = mesh
 mesh.select_set(True)
 bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')

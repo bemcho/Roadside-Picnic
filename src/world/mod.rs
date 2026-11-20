@@ -1,6 +1,7 @@
 //! World environment: terrain, lighting, atmosphere, ambience.
 
 mod ambience;
+mod base;
 mod collision;
 mod terrain;
 mod terrain_material;
@@ -15,7 +16,7 @@ use bevy::prelude::*;
 
 use crate::states::AppState;
 
-use terrain_material::{TerrainMaterial, load_terrain_material, prepare_ground_textures};
+use terrain_material::{TerrainMaterial, load_terrain_material, mipmap_tiling_textures};
 
 /// Direction toward the sun: late afternoon, ahead of the stalker's start.
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.35, 0.19, -1.0);
@@ -50,8 +51,11 @@ impl Plugin for WorldPlugin {
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .insert_resource(TreeSites(tree_sites))
             .insert_resource(terrain)
-            .add_systems(OnEnter(AppState::InGame), (spawn_world, spawn_forest))
-            .add_systems(Update, prepare_ground_textures)
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (spawn_world, spawn_forest, base::spawn_base),
+            )
+            .add_systems(Update, mipmap_tiling_textures)
             .add_systems(OnExit(AppState::InGame), despawn_world);
     }
 }
