@@ -1,6 +1,7 @@
 //! World environment: terrain, lighting, atmosphere, ambience.
 
 mod base;
+mod canopy;
 mod collision;
 mod hydrology;
 mod landscape;
@@ -21,6 +22,7 @@ use bevy::prelude::*;
 
 use crate::states::AppState;
 
+use canopy::CanopyModels;
 use landscape::{Landscape, LandscapeSource, prepare_landscape};
 use scenery::{Scenery, stream_scenery};
 use terrain_material::{TerrainMaterial, load_terrain_material, mipmap_tiling_textures};
@@ -64,13 +66,14 @@ impl Plugin for WorldPlugin {
             (
                 prepare_landscape,
                 load_landscape_materials,
+                canopy::preload_canopies,
                 plants::preload_plants,
             ),
         )
         .add_systems(
             OnEnter(AppState::InGame),
             (
-                spawn_world,
+                (canopy::prepare_canopy_materials, spawn_world).chain(),
                 spawn_sky,
                 base::spawn_base,
                 plants::prepare_plant_materials,
@@ -103,6 +106,7 @@ fn spawn_world(
     mut landscapes: ResMut<Assets<Landscape>>,
     mut meshes: ResMut<Assets<Mesh>>,
     materials: Res<LandscapeMaterials>,
+    canopies: Res<CanopyModels>,
 ) {
     let mut landscape = landscapes
         .get_mut(&source.0)
@@ -118,6 +122,7 @@ fn spawn_world(
             &materials.terrain,
             &materials.water,
             &materials.foliage,
+            &canopies,
         );
     });
 }

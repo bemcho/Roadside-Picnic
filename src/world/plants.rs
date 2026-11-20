@@ -56,26 +56,6 @@ impl Kind {
         }
     }
 
-    fn handles(self, server: &AssetServer) -> (Handle<Mesh>, Handle<GltfMaterial>) {
-        let path = self.path();
-        (
-            server.load(
-                GltfAssetLabel::Primitive {
-                    mesh: 0,
-                    primitive: 0,
-                }
-                .from_asset(path),
-            ),
-            server.load(
-                GltfAssetLabel::Material {
-                    index: 0,
-                    is_scale_inverted: false,
-                }
-                .from_asset(path),
-            ),
-        )
-    }
-
     fn size_and_roots(self) -> (f32, f32, f32) {
         match self {
             Self::DryGrass => (0.50, 1.08, 0.18),
@@ -110,7 +90,7 @@ pub(super) struct PlantModels([(Handle<Mesh>, Handle<StandardMaterial>); Kind::A
 
 pub(super) fn preload_plants(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for kind in Kind::ALL {
-        let (mesh, paint) = kind.handles(&server);
+        let (mesh, paint) = assets::load_single_primitive(&server, kind.path());
         preloaded.0.extend([mesh.untyped(), paint.untyped()]);
     }
 }
@@ -122,7 +102,7 @@ pub(super) fn prepare_plant_materials(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.insert_resource(PlantModels(Kind::ALL.map(|kind| {
-        let (mesh, paint) = kind.handles(&server);
+        let (mesh, paint) = assets::load_single_primitive(&server, kind.path());
         let paint = paints
             .get(&paint)
             .expect("plant materials finish preloading before the Zone opens");

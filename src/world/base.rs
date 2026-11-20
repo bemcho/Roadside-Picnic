@@ -1,4 +1,6 @@
-//! The stalkers' hangar, parked vehicle, and interior lighting.
+//! The stalkers' hangar, furniture, parked vehicle, and interior lighting.
+
+mod props;
 
 use std::sync::LazyLock;
 
@@ -96,6 +98,7 @@ pub(super) fn spawn_base(
         &mut materials,
     );
     commands.entity(vehicle).insert(WorldRoot);
+    props::spawn_hangar_props(&mut commands, hall, &server, &mut meshes, &mut materials);
     spawn_hall_probe(&mut commands, hall, &mut images);
     spawn_lamps(&mut commands, hall, &mut meshes, &mut materials);
 }
@@ -215,30 +218,30 @@ mod tests {
     }
 
     #[test]
-    fn player_spawn_and_vehicle_route_clear_the_imported_model() {
-        let walls = Collider(WALLS.as_slice());
-        let hall = GlobalTransform::IDENTITY;
+    fn player_spawn_and_vehicle_route_clear_the_furnished_hangar() {
+        let fixtures: Vec<_> = [(Collider(WALLS.as_slice()), GlobalTransform::IDENTITY)]
+            .into_iter()
+            .chain(props::colliders())
+            .collect();
+        let obstacles = || fixtures.iter().map(|(collider, pose)| (collider, pose));
         let mut vehicle = parked_vehicle(Vec3::ZERO);
         let spawn = Vec2::from(SPAWN) - Vec2::from(BASE);
         assert!(DOOR_Z * MODEL_SCALE - spawn.y > 5.0);
         let start = Vec3::new(spawn.x, 0.0, spawn.y);
         assert!(vehicle_distance(&vehicle, start) > 0.35);
-        assert_eq!(
-            push_out(
-                spawn,
-                0.0,
-                Body {
-                    radius: 0.35,
-                    height: 1.8
-                },
-                [(&walls, &hall)]
-            ),
-            spawn
-        );
+        let body = Body {
+            radius: 0.35,
+            height: 1.8,
+        };
+        let mut walk = spawn;
+        while walk.y <= DOOR_Z * MODEL_SCALE + 1.0 {
+            assert_eq!(push_out(walk, 0.0, body, obstacles()), walk);
+            walk.y += 0.2;
+        }
         let forward = vehicle.rotation * Vec3::Z;
         while vehicle.translation.z <= MODEL_SCALE * 0.4932 + 3.0 {
             assert!(
-                !blocked(&vehicle, [(&walls, &hall)].into_iter()),
+                !blocked(&vehicle, obstacles()),
                 "blocked at {}",
                 vehicle.translation
             );

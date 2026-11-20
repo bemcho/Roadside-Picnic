@@ -10,6 +10,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::player::Player;
 
+use super::canopy::ForestTree;
 use super::collision::{Collider, Pillar};
 use super::hydrology::Wetlands;
 use super::plants::{self, PlantModels, PlantSite};
@@ -57,6 +58,7 @@ impl Site {
 #[derive(Clone)]
 pub(super) struct Sites {
     pub solids: Vec<Site>,
+    pub canopies: Vec<ForestTree>,
     pub undergrowth: Vec<TreeSite>,
     pub plants: Vec<PlantSite>,
 }
@@ -157,16 +159,25 @@ pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>
     let rocks = sites_for_tile(terrain, tile, 16.0, Kind::Rock);
     let mut forest = Batch::default();
     let mut stone = Batch::default();
-    for site in &pines {
-        pine(*site, &mut forest);
+    let mut canopies = Vec::new();
+    let mut solids = Vec::new();
+    for site in pines {
+        if let Some(tree) = ForestTree::replace_pine(terrain, site.pose, site.seed) {
+            canopies.push(tree);
+        } else {
+            pine(site, &mut forest);
+            solids.push(site);
+        }
     }
-    for site in &rocks {
-        rock(*site, &mut stone);
+    for site in rocks {
+        rock(site, &mut stone);
+        solids.push(site);
     }
     grow_reeds(terrain, tile, &mut forest);
     (
         Sites {
-            solids: pines.into_iter().chain(rocks).collect(),
+            solids,
+            canopies,
             undergrowth: trees::tree_sites(terrain, tile),
             plants: plants::plant_sites(terrain, tile),
         },
@@ -212,6 +223,9 @@ pub(super) fn stream_scenery(
                 .with_children(|objects| {
                     for site in &sites.solids {
                         objects.spawn((site.pose, site.solid()));
+                    }
+                    for tree in &sites.canopies {
+                        objects.spawn((tree.pose, tree.collider()));
                     }
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
                     plants::spawn_plants(objects, &plants, &sites.plants);
@@ -456,6 +470,51 @@ mod tests {
     }
 
     #[test]
+    fn groves_mix_all_three_imported_sizes_with_grounded_solid_trunks() {
+        let terrain = Terrain::new();
+        let mut sizes = [false; 3];
+        for tile in [IVec2::new(-2, -1), IVec2::new(-2, 0), IVec2::new(1, 0)] {
+            let pines = sites_for_tile(&terrain, tile, 8.0, Kind::Pine);
+            let (sites, _, _) = build_tile(&terrain, tile);
+            let procedural = sites.solids.iter().filter(|s| s.kind == Kind::Pine).count();
+            assert!(procedural > 0);
+            assert_eq!(sites.canopies.len() + procedural, pines.len());
+            for tree in sites.canopies {
+                let pose = tree.pose;
+                let size = pose.scale.y;
+                let band = if size < 8.0 {
+                    0
+                } else if size < 20.0 {
+                    1
+                } else {
+                    2
+                };
+                sizes[band] = true;
+                let collider = tree.collider();
+                let trunk = collider.0[0];
+                let at = pose.transform_point(Vec3::new(trunk.x, 0.0, trunk.z));
+                let ground = terrain.mesh_height_at(at.xz());
+                assert!(at.y <= ground);
+                assert_eq!(terrain.water_depth_at(at.x, at.z), 0.0);
+                assert!(terrain.road_mask(at.x, at.z) <= 0.02);
+                assert_ne!(
+                    push_out(
+                        at.xz(),
+                        ground,
+                        Body {
+                            radius: 0.35,
+                            height: 0.5,
+                        },
+                        [(&collider, &GlobalTransform::from(pose))],
+                    ),
+                    at.xz()
+                );
+            }
+        }
+        assert_eq!(sizes, [true; 3]);
+    }
+
+    #[test]
     fn large_rocks_are_grounded_solid_obstacles() {
         let terrain = Terrain::new();
         let rocks = sites_for_tile(&terrain, IVec2::new(4, 4), 16.0, Kind::Rock);
@@ -502,6 +561,7 @@ mod tests {
                 IVec2::ZERO,
                 Sites {
                     solids: vec![boulder],
+                    canopies: vec![],
                     undergrowth: vec![],
                     plants: vec![],
                 },

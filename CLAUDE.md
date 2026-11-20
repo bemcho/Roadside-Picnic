@@ -51,8 +51,13 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   drive through the shallows; deep water stops you. The main dirt track crosses
   at a vehicle-depth ford.
 - **Scenery** (`src/world/scenery.rs`): dense, deterministic pine groves and
-  textured rock outcrops are drawn in chunk batches. Colliders and detailed
-  undergrowth stream in a 3×3 chunk neighborhood around the stalker.
+  textured rock outcrops are drawn in chunk batches. Some pine sites instead use
+  the textured sapling, broadleaf, or very tall conifer in `assets/models/trees/`.
+  Their shared meshes, distance fades, root footprints, and trunks are configured
+  in `src/world/canopy.rs`. Rebuild them with glTF Transform `simplify --ratio
+  0.003 --error 0.007`, `resize --width 1024 --height 1024`, and `tangents` (all
+  with `--vertex-layout separate`), then `tools/prepare_plant_asset.py`.
+  Colliders and detailed undergrowth stream in a 3×3 chunk neighborhood.
 - **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
   shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
   The five shared GLBs live in `assets/models/plants/`; regenerate them with
@@ -85,6 +90,13 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   `tools/prepare_hangar_asset.py` to level the slab and apron. If the geometry
   changes, remeasure the walls and pendant mounts in `base.rs`. A local light
   probe and warm pendants keep the interior dim without changing outdoor lighting.
+  The workshop and tool rack, jack, map board, lab bench, table, and toilet
+  use the hangar-local poses and collision in `src/world/base/props.rs`.
+  Rebuild their GLBs in `assets/models/base/props/` with glTF Transform `simplify
+  --ratio 0.012 --error 0.0035`, `resize --width 1024 --height 1024`, and
+  `tangents` (all with `--vertex-layout separate`), then ground them and repair
+  tangent seams with `tools/prepare_plant_asset.py`. Keep the central aisle
+  and the parked vehicle's path through the bay clear.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
   The chassis and suspension sample the rendered terrain under the wheels.

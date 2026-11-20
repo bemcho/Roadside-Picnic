@@ -7,6 +7,7 @@
 //! the project's forward-looking contract for asset locations. When a module
 //! starts using one, the compiler will demand the attribute be removed.
 
+use bevy::gltf::GltfMaterial;
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::shader::Shader;
@@ -30,8 +31,18 @@ pub const GLOWWEED: &str = "models/plants/glowweed.glb";
 pub const HOGWEED: &str = "models/plants/hogweed.glb";
 pub const SHRUB: &str = "models/plants/shrub.glb";
 pub const THORNBUSH: &str = "models/plants/thornbush.glb";
+pub const TREE_SMALL: &str = "models/trees/tree_small.glb";
+pub const TREE_BIG: &str = "models/trees/tree_big.glb";
+pub const TREE_VERY_TALL: &str = "models/trees/tree_veryhigh.glb";
 pub const BASE_HANGAR: &str = "models/base/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
+pub const HANGAR_LAB: &str = "models/base/props/lab.glb";
+pub const HANGAR_MAP_BOARD: &str = "models/base/props/mapboard.glb";
+pub const HANGAR_REPAIR_STAND: &str = "models/base/props/repairstand.glb";
+pub const HANGAR_TABLE: &str = "models/base/props/table.glb";
+pub const HANGAR_TOILET: &str = "models/base/props/toilet.glb";
+pub const HANGAR_TOOLS: &str = "models/base/props/tools.glb";
+pub const HANGAR_WORKSHOP: &str = "models/base/props/workshop.glb";
 
 /// Root folder for textures and materials.
 #[expect(dead_code)]
@@ -57,6 +68,13 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         FAUNA_OVERGROWTH,
         FAUNA_MUD_BOG,
         FAUNA_SLIME_DITCH,
+        HANGAR_LAB,
+        HANGAR_MAP_BOARD,
+        HANGAR_REPAIR_STAND,
+        HANGAR_TABLE,
+        HANGAR_TOILET,
+        HANGAR_TOOLS,
+        HANGAR_WORKSHOP,
     ];
     let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
     let data_maps = [
@@ -81,6 +99,29 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         server.load::<Shader>(TERRAIN_SHADER).untyped(),
         server.load::<Shader>(WATER_SHADER).untyped(),
     ]);
+}
+
+/// Loads the shared mesh and material of a single-primitive GLB.
+pub(crate) fn load_single_primitive(
+    server: &AssetServer,
+    path: &'static str,
+) -> (Handle<Mesh>, Handle<GltfMaterial>) {
+    (
+        server.load(
+            GltfAssetLabel::Primitive {
+                mesh: 0,
+                primitive: 0,
+            }
+            .from_asset(path),
+        ),
+        server.load(
+            GltfAssetLabel::Material {
+                index: 0,
+                is_scale_inverted: false,
+            }
+            .from_asset(path),
+        ),
+    )
 }
 
 /// Loads a tiling texture: repeating, anisotropically filtered.

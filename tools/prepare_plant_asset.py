@@ -1,4 +1,6 @@
-"""Ground an optimized plant GLB, remove the thornbush plaque, and bake glowweed emission.
+"""Ground an optimized single-mesh prop or plant GLB and repair degenerate tangents.
+
+Also remove the thornbush plaque and bake glowweed emission for those assets.
 
 Use after glTF Transform simplify, resize and tangents with --vertex-layout separate:
     python3 tools/prepare_plant_asset.py input.glb assets/models/plants/glowweed.glb

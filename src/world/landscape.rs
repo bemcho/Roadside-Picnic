@@ -6,6 +6,7 @@ use bevy::tasks::AsyncComputeTaskPool;
 
 use crate::assets::PreloadedAssets;
 
+use super::canopy::{self, CanopyModels};
 use super::scenery::{self, Scenery, Sites};
 use super::terrain::{TILE_RADIUS, Terrain};
 use super::terrain_material::TerrainMaterial;
@@ -88,11 +89,15 @@ impl Landscape {
         terrain: &Handle<TerrainMaterial>,
         water_surface: &Handle<WaterMaterial>,
         foliage: &Handle<StandardMaterial>,
+        canopies: &CanopyModels,
     ) {
         for tile in &self.meshes {
             world.spawn((Mesh3d(tile.ground.clone()), MeshMaterial3d(terrain.clone())));
             if let Some(mesh) = &tile.water {
                 water::spawn(world, mesh.clone(), water_surface);
+            }
+            for sites in self.sites.values() {
+                canopy::spawn_canopies(world, canopies, &sites.canopies);
             }
             if let Some(mesh) = &tile.forest {
                 world.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(foliage.clone())));
