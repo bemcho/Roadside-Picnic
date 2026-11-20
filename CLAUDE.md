@@ -36,18 +36,27 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 
 ## Procedural content
 
-- **Terrain** (`src/world/terrain.rs`) is generated deterministically (value-noise fBm,
-  no external crates): rolling overgrown hills, a quarry with a raised lip, a scorched
-  bald hill, a marshy lowland, and a dirt road to the quarry rim. Heights are sampled
+- **Terrain** (`src/world/terrain.rs`) is a deterministic 1.536 km square built in
+  128 m chunks: mountains, rolling hills, the old quarry and bald hill, and dirt tracks
+  from the hangar to the quarry and the main river ford. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
   in other plugins. `tools/prepare_terrain_textures.py` extracts tiling albedo,
   normal, and packed AO/roughness/height maps from `terrain_texture_image_2.webp`
   (moss) and `terrain_texture_1.webp` (bare ground). The shader blends irregular
-  patches over the terrain masks and uses the heights for shallow parallax.
+  patches over the terrain masks, uses the heights for shallow parallax, and adds
+  snow on high, gentler slopes.
+- **Water** (`src/world/{hydrology,water}.rs`): the main river feeds a lake in
+  the northwest and joins a northern tributary; the nearby swamp has shallow pools
+  between drier hummocks. Use `Terrain::water_depth_at` for traversal. Walk and
+  drive through the shallows; deep water stops you. The main dirt track crosses
+  at a vehicle-depth ford.
+- **Scenery** (`src/world/scenery.rs`): dense, deterministic pine groves and
+  textured rock outcrops are drawn in chunk batches. Colliders and detailed
+  undergrowth stream in a 3×3 chunk neighborhood around the stalker.
 - **Fauna** (`src/world/trees.rs`): four extracted, textured models
   (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
-  weighted by `Terrain::woodland_at` (off-road, outside the quarry, flat-ish, sparse
-  on the bald hill). Rebuild them from the packed source with
+  weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
+  the treeline and on the bald hill). Rebuild them from the packed source with
   `tools/prepare_fauna_asset.py <source.glb> assets/models/fauna assets/textures/fauna`
   (run in headless Blender after `--`). It reuses the saved albedo, normal and
   roughness PNGs; `--boards <image_3> <image_2> <image_1> <image_0>` rebuilds
@@ -58,15 +67,15 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   each extracted cluster is centered with its lowest point at ground level.
   Regenerate each collision pillar file with `tools/trim_tree_base.py` whenever
   the source geometry changes.
-- **Base** (`src/world/base.rs`): the stalkers' home, an industrial catwalk yard
-  (`assets/models/base/warehouse.glb`, Tripo, decimated like the trees) on a levelled
-  pad at `terrain::BASE` on the south edge. Runs start at `SPAWN` inside it, and a
-  `Respawn` message (sent when the stalker touches an anomaly) brings them back there.
-  Seat the imported catwalk feet and floor props with `tools/ground_warehouse.py`
-  before regenerating its pillars with `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
-  `tools/prepare_hangar_textures.py` bakes seamless gray concrete and derives
-  panel, steel, and trim textures from the four hangar reference boards.
-  A local light probe keeps the interior dim; pendants and wall lights light the floor in pools.
+- **Base** (`src/world/base.rs`): the imported steel hangar
+  (`assets/models/base/hangar.glb`) sits on a levelled pad at `terrain::BASE`.
+  The north (+Z) door stays open for the vehicle, and runs and respawns start at
+  `SPAWN` inside. Rebuild the runtime GLB with glTF Transform `simplify --ratio
+  0.045 --error 0.0014`, then `resize --width 2048 --height 2048` (use
+  `--vertex-layout separate` for both), bake `tangents`, then run
+  `tools/prepare_hangar_asset.py` to level the slab and apron. If the geometry
+  changes, remeasure the walls and pendant mounts in `base.rs`. A local light
+  probe and warm pendants keep the interior dim without changing outdoor lighting.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
   `tools/prepare_vehicle_asset.py` rebuilds the GLB with

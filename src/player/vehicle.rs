@@ -17,6 +17,7 @@ const HALF_EXTENTS: Vec2 = Vec2::new(0.283 * MODEL_SCALE, 0.5 * MODEL_SCALE);
 const HULL_HEIGHT: f32 = 0.47 * MODEL_SCALE;
 const GROUND_CLEARANCE: f32 = 0.02;
 const ENTRY_REACH: f32 = 1.65;
+const FORD_DEPTH: f32 = 0.60;
 const FORWARD: Vec3 = Vec3::Z;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const COLLISION: &[Pillar] = include!("../world/pillars/armored_vehicle.rs");
@@ -259,6 +260,7 @@ fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool
         let exit = sample(0.9);
         (exit.xz().abs().max_element() < TERRAIN_HALF_SIZE - super::EDGE_MARGIN
             && (exit.y - at.translation.y).abs() <= 1.2
+            && terrain.water_depth_at(exit.x, exit.z) <= 0.75
             && clear(sample(STANDING.radius))
             && clear(exit))
         .then_some(exit)
@@ -286,7 +288,9 @@ pub(super) fn drive_vehicle(
     let target = if brake {
         0.0
     } else {
-        throttle * if throttle >= 0.0 { 10.0 } else { 4.0 }
+        let water = terrain.water_depth_at(at.translation.x, at.translation.z);
+        let speed = if throttle >= 0.0 { 10.0 } else { 4.0 };
+        throttle * speed * (1.0 - 0.60 * water.min(FORD_DEPTH))
     };
     let dt = time.delta_secs();
     let steps = (dt / 0.04).ceil().max(1.0) as u32;
@@ -313,6 +317,7 @@ pub(super) fn drive_vehicle(
         next.translation.y =
             terrain.height_at(next.translation.x, next.translation.z) + GROUND_CLEARANCE;
         if next.translation.xz().abs().max_element() > TERRAIN_HALF_SIZE - HALF_EXTENTS.length()
+            || !terrain.can_wade(at.translation.xz(), next.translation.xz(), FORD_DEPTH)
             || blocked(&next, other_colliders(&colliders, driving.0))
         {
             vehicle.speed = 0.0;
@@ -496,6 +501,57 @@ mod tests {
             .translation;
         assert!(vehicle_distance(&driven, feet) >= STANDING.radius);
         assert_eq!(app.world().get::<Transform>(vehicle), Some(&driven));
+    }
+
+    #[test]
+    fn drives_through_the_ford_but_stops_at_the_deep_channel() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, drive_vehicle);
+        let terrain = Terrain::new();
+        let start = |x: f32, z: f32| Transform::from_xyz(x, terrain.height_at(x, z), z);
+        let vehicle = app
+            .world_mut()
+            .spawn((Vehicle::default(), start(35.0, 305.0)))
+            .id();
+        app.world_mut()
+            .spawn((Player::default(), Transform::default(), Driving(vehicle)));
+        press(&mut app, KeyCode::KeyW);
+        for _ in 0..180 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(vehicle)
+            .expect("ford traversal")
+            .translation;
+        assert!(at.z > 368.0, "car never crossed the ford: {at}");
+
+        app.world_mut()
+            .entity_mut(vehicle)
+            .insert((Vehicle::default(), start(100.0, 300.0)));
+        for _ in 0..150 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(vehicle)
+            .expect("at the bank")
+            .translation;
+        assert!((315.0..330.0).contains(&at.z), "car stopped at {at}");
+        assert!(terrain.water_depth_at(at.x, at.z) <= FORD_DEPTH);
+        assert_eq!(
+            app.world()
+                .get::<Vehicle>(vehicle)
+                .expect("parked at the bank")
+                .speed(),
+            0.0
+        );
     }
 
     #[test]

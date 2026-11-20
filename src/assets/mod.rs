@@ -14,6 +14,7 @@ use bevy::shader::Shader;
 pub const SPLASH_HANGAR: &str = "textures/splash/hangar.png";
 pub const STALKER_MODEL: &str = "models/stalker.glb";
 pub const TERRAIN_SHADER: &str = "shaders/terrain.wesl";
+pub const WATER_SHADER: &str = "shaders/water.wesl";
 pub const TERRAIN_GRASS_ALBEDO: &str = "textures/terrain/grass_albedo.png";
 pub const TERRAIN_GRASS_NORMAL: &str = "textures/terrain/grass_normal.png";
 pub const TERRAIN_GRASS_SURFACE: &str = "textures/terrain/grass_surface.png";
@@ -24,20 +25,8 @@ pub const FAUNA_DEAD_FOREST: &str = "models/fauna/dead_forest.glb";
 pub const FAUNA_OVERGROWTH: &str = "models/fauna/overgrowth.glb";
 pub const FAUNA_MUD_BOG: &str = "models/fauna/mud_bog.glb";
 pub const FAUNA_SLIME_DITCH: &str = "models/fauna/slime_ditch.glb";
-pub const BASE_YARD: &str = "models/base/warehouse.glb";
+pub const BASE_HANGAR: &str = "models/base/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
-pub const BASE_CONCRETE_ALBEDO: &str = "textures/base/concrete_albedo.png";
-pub const BASE_CONCRETE_NORMAL: &str = "textures/base/concrete_normal.png";
-pub const BASE_CONCRETE_ARM: &str = "textures/base/concrete_arm.png";
-pub const BASE_WALL_ALBEDO: &str = "textures/base/wall_albedo.png";
-pub const BASE_WALL_NORMAL: &str = "textures/base/wall_normal.png";
-pub const BASE_WALL_ARM: &str = "textures/base/wall_arm.png";
-pub const BASE_STEEL_ALBEDO: &str = "textures/base/steel_albedo.png";
-pub const BASE_STEEL_NORMAL: &str = "textures/base/steel_normal.png";
-pub const BASE_STEEL_ARM: &str = "textures/base/steel_arm.png";
-pub const BASE_YELLOW_ALBEDO: &str = "textures/base/yellow_albedo.png";
-pub const BASE_HAZARD_ALBEDO: &str = "textures/base/hazard_albedo.png";
-pub const BASE_GRATE_ALBEDO: &str = "textures/base/grate_albedo.png";
 
 /// Root folder for textures and materials.
 #[expect(dead_code)]
@@ -57,34 +46,19 @@ pub(crate) struct PreloadedAssets(pub Vec<UntypedHandle>);
 pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<PreloadedAssets>) {
     let scenes = [
         STALKER_MODEL,
-        BASE_YARD,
+        BASE_HANGAR,
         BASE_VEHICLE,
         FAUNA_DEAD_FOREST,
         FAUNA_OVERGROWTH,
         FAUNA_MUD_BOG,
         FAUNA_SLIME_DITCH,
     ];
-    let albedo = [
-        TERRAIN_GRASS_ALBEDO,
-        TERRAIN_EARTH_ALBEDO,
-        BASE_CONCRETE_ALBEDO,
-        BASE_WALL_ALBEDO,
-        BASE_STEEL_ALBEDO,
-        BASE_YELLOW_ALBEDO,
-        BASE_HAZARD_ALBEDO,
-        BASE_GRATE_ALBEDO,
-    ];
+    let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
     let data_maps = [
         TERRAIN_GRASS_NORMAL,
         TERRAIN_GRASS_SURFACE,
         TERRAIN_EARTH_NORMAL,
         TERRAIN_EARTH_SURFACE,
-        BASE_CONCRETE_NORMAL,
-        BASE_CONCRETE_ARM,
-        BASE_WALL_NORMAL,
-        BASE_WALL_ARM,
-        BASE_STEEL_NORMAL,
-        BASE_STEEL_ARM,
     ];
     assets.0.extend(scenes.map(|path| {
         server
@@ -100,6 +74,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     assets.0.extend([
         server.load::<Image>(SPLASH_HANGAR).untyped(),
         server.load::<Shader>(TERRAIN_SHADER).untyped(),
+        server.load::<Shader>(WATER_SHADER).untyped(),
     ]);
 }
 

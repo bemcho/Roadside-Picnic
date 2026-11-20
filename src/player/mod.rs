@@ -124,7 +124,7 @@ impl Plugin for PlayerPlugin {
 const SPAWN_YAW: f32 = PI;
 
 /// Where the stalker stands at the start of a run and after respawning:
-/// inside the base by its door, facing out (model +Z) and away from the camera.
+/// inside the base, facing out (model +Z) and away from the camera.
 fn spawn_transform(terrain: &Terrain) -> Transform {
     let spawn = Vec3::new(SPAWN.0, terrain.height_at(SPAWN.0, SPAWN.1), SPAWN.1);
     Transform::from_translation(spawn)
@@ -164,6 +164,10 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
     commands.spawn((
         PlayerCamera,
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            far: 2700.0,
+            ..default()
+        }),
         Transform::from_translation(focus + orbit.offset()).looking_at(focus, Vec3::Y),
         orbit,
         AtmosphereSettings::default(),
@@ -262,10 +266,19 @@ fn move_player(
     } else {
         player.walk_speed
     };
+    let wading = terrain.water_depth_at(transform.translation.x, transform.translation.z);
+    let speed = speed * (1.0 - 0.46 * wading.min(1.0));
     let step = direction * speed * time.delta_secs();
     let target = transform.translation + step;
     let body = if crawling { PRONE } else { STANDING };
     let clear = push_out(target.xz(), target.y, body, colliders);
+    let from = transform.translation.xz();
+    let limit = if crawling { 0.28 } else { 1.05 };
+    let clear = if terrain.can_wade(from, clear, limit) {
+        clear
+    } else {
+        from
+    };
     let ground = ground_position(&terrain, Vec3::new(clear.x, target.y, clear.y));
 
     if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
@@ -281,7 +294,7 @@ fn move_player(
     transform.translation = Vec3::new(ground.x, y, ground.z);
     locomotion.vertical_speed = vertical_speed;
     locomotion.grounded = grounded;
-    let moving = direction != Vec3::ZERO;
+    let moving = ground.xz().distance_squared(from) > 1e-8;
     locomotion.gait = match (grounded, crawling, moving, running) {
         (false, ..) => Gait::Jump,
         (true, true, false, _) => Gait::Prone,
@@ -325,8 +338,9 @@ mod tests {
     #[test]
     fn stalker_cannot_leave_the_terrain() {
         let terrain = Terrain::new();
-        let grounded = ground_position(&terrain, Vec3::new(500.0, 0.0, -500.0));
         let limit = TERRAIN_HALF_SIZE - EDGE_MARGIN;
+        let outside = TERRAIN_HALF_SIZE + 20.0;
+        let grounded = ground_position(&terrain, Vec3::new(outside, 0.0, -outside));
         assert_eq!((grounded.x, grounded.z), (limit, -limit));
     }
 

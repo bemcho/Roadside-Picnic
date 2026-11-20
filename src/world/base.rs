@@ -1,220 +1,109 @@
-//! The stalkers' base: an old industrial hangar on a levelled pad at the
-//! south edge of the Zone. A concrete hall of weathered panels, steel
-//! columns, roof trusses and an overhead crane shelters a yard of catwalks,
-//! crates and machinery. Runs start inside, by the door that opens north
-//! into the Zone, and the Zone sends dead stalkers back here.
+//! The stalkers' hangar, parked vehicle, and interior lighting.
 
-use std::f32::consts::FRAC_PI_2;
 use std::sync::LazyLock;
 
 use bevy::light::{EnvironmentMapLight, LightProbe};
-use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 
-use crate::assets::{self, load_repeating};
+use crate::assets::BASE_HANGAR;
 use crate::player::vehicle::{parked_vehicle, spawn_vehicle};
 
 use super::WorldRoot;
 use super::collision::{Collider, Pillar};
 use super::terrain::{BASE, Terrain};
 
-/// Hall footprint and height in meters, around [`BASE`]. The door is in the
-/// north (+Z) wall.
-pub(super) const HALF_WIDTH: f32 = 17.0;
-pub(super) const HALF_DEPTH: f32 = 19.0;
-const HEIGHT: f32 = 13.0;
-const WALL_THICKNESS: f32 = 0.3;
-const DOOR_HALF_WIDTH: f32 = 6.0;
-const DOOR_HEIGHT: f32 = 9.0;
+const MODEL_SCALE: f32 = 38.0;
+const FLOOR_DATUM: f32 = 0.0217;
+const DOOR_Z: f32 = 0.375;
+const DOOR_HALF_WIDTH: f32 = 0.294;
 
-/// The floor sits a hair above the levelled pad so no terrain shows through.
-const FLOOR_LIFT: f32 = 0.02;
-const SLAB_DEPTH: f32 = 0.6;
-const CONCRETE_REPEAT: f32 = 11.0;
-
-/// Bays between the columns and roof trusses, along the hall.
-const BAY: f32 = 6.0;
-const CRANE_HEIGHT: f32 = 9.5;
-
-/// Meters per yard model unit: a ~20 m yard with walkways ~5 m up, set at
-/// the back of the hall so the front stays clear around the door.
-const YARD_SCALE: f32 = 20.0;
-const YARD_OFFSET: f32 = -8.5;
-
-/// The yard's collision, measured by tools/trim_tree_base.py.
-const YARD: &[Pillar] = include!("pillars/warehouse.rs");
-
-/// The hall walls as a fence of overlapping posts, open at the door.
+/// Inner and outer steel faces measured from the GLB in model units.
 static WALLS: LazyLock<Vec<Pillar>> = LazyLock::new(|| {
-    const SPACING: f32 = 0.5;
-    let post = |x, z| Pillar {
-        x,
-        z,
-        radius: 0.4,
-        bottom: -1.0,
-        top: HEIGHT,
-    };
-    let steps = |from: f32, to: f32| {
-        let count = ((to - from) / SPACING).round() as usize;
-        (0..=count).map(move |i| from + (to - from) * i as f32 / count as f32)
-    };
-    let sides =
-        steps(-HALF_DEPTH, HALF_DEPTH).flat_map(|z| [post(-HALF_WIDTH, z), post(HALF_WIDTH, z)]);
-    let back = steps(-HALF_WIDTH, HALF_WIDTH).map(|x| post(x, -HALF_DEPTH));
-    let front = steps(DOOR_HALF_WIDTH, HALF_WIDTH)
-        .flat_map(|x| [post(-x, HALF_DEPTH), post(x, HALF_DEPTH)]);
-    sides.chain(back).chain(front).collect()
-});
-
-/// The hall's surfaces.
-struct Paints {
-    concrete: Handle<StandardMaterial>,
-    panels: Handle<StandardMaterial>,
-    steel: Handle<StandardMaterial>,
-    yellow: Handle<StandardMaterial>,
-    hazard: Handle<StandardMaterial>,
-    grate: Handle<StandardMaterial>,
-    skylight: Handle<StandardMaterial>,
-    bulb: Handle<StandardMaterial>,
-}
-
-impl Paints {
-    fn new(server: &AssetServer, materials: &mut Assets<StandardMaterial>) -> Self {
-        let surface = |albedo, normal, arm, tint: Color, roughness, metallic| {
-            let arm = load_repeating(server, arm, false);
-            StandardMaterial {
-                base_color: tint,
-                base_color_texture: Some(load_repeating(server, albedo, true)),
-                normal_map_texture: Some(load_repeating(server, normal, false)),
-                metallic_roughness_texture: Some(arm.clone()),
-                occlusion_texture: Some(arm),
-                perceptual_roughness: roughness,
-                metallic,
-                ..default()
-            }
-        };
-        let trim = |albedo, roughness, metallic| {
-            surface(
-                albedo,
-                assets::BASE_STEEL_NORMAL,
-                assets::BASE_STEEL_ARM,
-                Color::WHITE,
-                roughness,
-                metallic,
-            )
-        };
-        let glowing = |color: LinearRgba, nits: f32| StandardMaterial {
-            base_color: Color::WHITE,
-            emissive: color * nits,
-            ..default()
-        };
-        Self {
-            concrete: materials.add(surface(
-                assets::BASE_CONCRETE_ALBEDO,
-                assets::BASE_CONCRETE_NORMAL,
-                assets::BASE_CONCRETE_ARM,
-                Color::WHITE,
-                0.82,
-                0.0,
-            )),
-            panels: materials.add(surface(
-                assets::BASE_WALL_ALBEDO,
-                assets::BASE_WALL_NORMAL,
-                assets::BASE_WALL_ARM,
-                Color::srgb(1.5, 1.5, 1.55),
-                0.92,
-                0.27,
-            )),
-            steel: materials.add(trim(assets::BASE_STEEL_ALBEDO, 0.9, 0.7)),
-            yellow: materials.add(trim(assets::BASE_YELLOW_ALBEDO, 0.95, 0.08)),
-            hazard: materials.add(trim(assets::BASE_HAZARD_ALBEDO, 0.96, 0.1)),
-            grate: materials.add(trim(assets::BASE_GRATE_ALBEDO, 0.82, 0.72)),
-            skylight: materials.add(glowing(LinearRgba::rgb(0.77, 0.86, 1.0), 2_800.0)),
-            bulb: materials.add(glowing(LinearRgba::rgb(1.0, 0.90, 0.75), 38_000.0)),
+    let mut walls = Vec::new();
+    let mut run = |start: Vec2, end: Vec2| {
+        let length = start.distance(end) * MODEL_SCALE;
+        let steps = (length / 0.38).ceil() as u32;
+        for i in 0..=steps {
+            let p = start.lerp(end, i as f32 / steps as f32) * MODEL_SCALE;
+            walls.push(Pillar {
+                x: p.x,
+                z: p.y,
+                radius: 0.32,
+                bottom: -0.5,
+                top: 11.0,
+            });
         }
-    }
-}
-
-/// Spawns parts of the hall as children of its root.
-struct Builder<'a, 'w, 's> {
-    commands: &'a mut Commands<'w, 's>,
-    meshes: &'a mut Assets<Mesh>,
-    hall: Entity,
-}
-
-impl Builder<'_, '_, '_> {
-    fn add(&mut self, mesh: Mesh, material: &Handle<StandardMaterial>, transform: Transform) {
-        self.commands.spawn((
-            Mesh3d(self.meshes.add(mesh)),
-            MeshMaterial3d(material.clone()),
-            transform,
-            ChildOf(self.hall),
-        ));
-    }
-
-    /// A box of `size` centered at `center`, its texture tiled every `tile` m.
-    fn block(&mut self, size: Vec3, tile: f32, material: &Handle<StandardMaterial>, center: Vec3) {
-        self.add(
-            tiled_box(size, tile),
-            material,
-            Transform::from_translation(center),
+    };
+    const INNER: [(f32, f32); 7] = [
+        (0.302, -0.476),
+        (0.323, -0.30),
+        (0.350, -0.15),
+        (0.375, 0.0),
+        (0.421, 0.15),
+        (0.434, 0.30),
+        (0.425, DOOR_Z),
+    ];
+    const OUTER: [(f32, f32); 5] = [
+        (0.402, -0.479),
+        (0.418, -0.30),
+        (0.425, 0.0),
+        (0.444, 0.30),
+        (0.445, DOOR_Z),
+    ];
+    for sign in [-1.0, 1.0] {
+        for face in [&INNER[..], &OUTER[..]] {
+            for &[a, b] in face.array_windows() {
+                run(Vec2::new(sign * a.0, a.1), Vec2::new(sign * b.0, b.1));
+            }
+        }
+        run(
+            Vec2::new(sign * DOOR_HALF_WIDTH, DOOR_Z),
+            Vec2::new(sign * 0.445, DOOR_Z),
         );
     }
-}
+    run(Vec2::new(-0.405, -0.476), Vec2::new(0.405, -0.476));
+    walls
+});
 
 pub(super) fn spawn_base(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    server: Res<AssetServer>,
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let floor = terrain.height_at(BASE.0, BASE.1) + FLOOR_LIFT;
+    let pad = Vec3::new(BASE.0, terrain.height_at(BASE.0, BASE.1), BASE.1);
     let hall = commands
         .spawn((
             WorldRoot,
-            Transform::from_xyz(BASE.0, floor, BASE.1),
+            Transform::from_translation(pad),
             Visibility::default(),
             Collider(WALLS.as_slice()),
         ))
         .id();
-    // The yard's open side (model +Z) faces the door.
     commands.spawn((
-        WorldAssetRoot(asset_server.load(format!("{}#Scene0", assets::BASE_YARD))),
-        Transform::from_xyz(0.0, 0.0, YARD_OFFSET).with_scale(Vec3::splat(YARD_SCALE)),
-        Collider(YARD),
+        WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(BASE_HANGAR))),
+        Transform::from_xyz(0.0, -FLOOR_DATUM * MODEL_SCALE, 0.0)
+            .with_scale(Vec3::splat(MODEL_SCALE)),
         ChildOf(hall),
     ));
     let vehicle = spawn_vehicle(
         &mut commands,
-        &asset_server,
-        parked_vehicle(Vec3::new(BASE.0, floor, BASE.1)),
+        &server,
+        parked_vehicle(pad + Vec3::Y * 0.035),
         &mut meshes,
         &mut materials,
     );
     commands.entity(vehicle).insert(WorldRoot);
     spawn_hall_probe(&mut commands, hall, &mut images);
-
-    let paints = Paints::new(&asset_server, &mut materials);
-    let mut builder = Builder {
-        commands: &mut commands,
-        meshes: &mut meshes,
-        hall,
-    };
-    spawn_shell(&mut builder, &paints);
-    spawn_frame(&mut builder, &paints);
-    spawn_crane(&mut builder, &paints);
-    spawn_lamps(&mut builder, &paints);
-    spawn_wall_lamps(&mut builder, &paints);
-    spawn_markings(&mut builder, &paints);
+    spawn_lamps(&mut commands, hall, &mut meshes, &mut materials);
 }
 
 fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<Image>) {
-    // Replace the outdoor sky bounce only within the walls, easing out at the door.
     commands.spawn((
         LightProbe {
-            falloff: Vec3::new(0.0, 0.0, 0.075),
+            falloff: Vec3::new(0.04, 0.14, 0.08),
         },
         EnvironmentMapLight::hemispherical_gradient(
             images,
@@ -222,423 +111,135 @@ fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<I
             Color::linear_rgb(0.62, 0.68, 0.76),
             Color::linear_rgb(0.25, 0.26, 0.30),
         )
-        .with_intensity(1_500.0),
-        Transform::from_xyz(0.0, HEIGHT / 2.0 - 0.15, 0.0).with_scale(Vec3::new(
-            2.0 * HALF_WIDTH,
-            HEIGHT + 0.3,
-            2.0 * HALF_DEPTH,
-        )),
+        .with_intensity(1_750.0),
+        Transform::from_xyz(0.0, 8.0, -2.0).with_scale(Vec3::new(29.0, 17.0, 33.0)),
         ChildOf(hall),
     ));
 }
 
-/// Floor slab and apron, walls with the door opening, and the roof.
-fn spawn_shell(b: &mut Builder, paints: &Paints) {
-    let (w, d) = (HALF_WIDTH, HALF_DEPTH);
-    let slab = Vec3::new(2.0 * w + 1.0, SLAB_DEPTH, 2.0 * d + 1.0);
-    b.block(
-        slab,
-        CONCRETE_REPEAT,
-        &paints.concrete,
-        Vec3::Y * -SLAB_DEPTH / 2.0,
-    );
-    let apron = Vec3::new(2.0 * DOOR_HALF_WIDTH + 4.0, SLAB_DEPTH, 6.0);
-    b.block(
-        apron,
-        CONCRETE_REPEAT,
-        &paints.concrete,
-        Vec3::new(0.0, -SLAB_DEPTH / 2.0, d + 3.0),
-    );
-
-    // Walls reach a meter below the floor, so no gap shows at the pad's edge.
-    let tall = HEIGHT + 1.0;
-    let mid = (HEIGHT - 1.0) / 2.0;
-    let sheet = &paints.panels;
-    for side in [-1.0, 1.0] {
-        b.block(
-            Vec3::new(WALL_THICKNESS, tall, 2.0 * d),
-            2.7,
-            sheet,
-            Vec3::new(side * w, mid, 0.0),
-        );
-        let jamb = w - DOOR_HALF_WIDTH;
-        let at = Vec3::new(side * (DOOR_HALF_WIDTH + jamb / 2.0), mid, d);
-        b.block(Vec3::new(jamb, tall, WALL_THICKNESS), 2.7, sheet, at);
-    }
-    b.block(
-        Vec3::new(2.0 * w, tall, WALL_THICKNESS),
-        2.7,
-        sheet,
-        Vec3::new(0.0, mid, -d),
-    );
-    let lintel = Vec3::new(2.0 * DOOR_HALF_WIDTH, HEIGHT - DOOR_HEIGHT, WALL_THICKNESS);
-    b.block(
-        lintel,
-        2.7,
-        sheet,
-        Vec3::new(0.0, (HEIGHT + DOOR_HEIGHT) / 2.0, d),
-    );
-
-    let roof = Vec3::new(2.0 * w + 1.0, 0.3, 2.0 * d + 1.0);
-    b.block(roof, 2.7, sheet, Vec3::Y * (HEIGHT + 0.15));
-    // Skylights: glowing panes along the hall, just under the roof.
-    for x in [-9.0, 0.0, 9.0] {
-        let pane = Vec3::new(2.4, 0.05, 2.0 * d - 4.0);
-        b.block(
-            pane,
-            1.0,
-            &paints.skylight,
-            Vec3::new(x, HEIGHT - 0.03, 0.0),
-        );
-    }
-}
-
-/// Steel columns with hazard-striped feet, roof trusses, and the door frame
-/// with its roll-up drum.
-fn spawn_frame(b: &mut Builder, paints: &Paints) {
-    let column_x = HALF_WIDTH - 0.45;
-    let chord = HEIGHT - 1.6;
-    let mut z = -HALF_DEPTH + 1.0;
-    while z <= HALF_DEPTH - 1.0 {
-        for side in [-1.0, 1.0] {
-            let x = side * column_x;
-            b.block(
-                Vec3::new(0.5, HEIGHT, 0.5),
-                1.0,
-                &paints.steel,
-                Vec3::new(x, HEIGHT / 2.0, z),
-            );
-            b.block(
-                Vec3::splat(0.56).with_y(1.6),
-                0.6,
-                &paints.hazard,
-                Vec3::new(x, 0.8, z),
-            );
-        }
-        spawn_truss(b, paints, z, column_x, chord);
-        z += BAY;
-    }
-
-    let jamb_x = DOOR_HALF_WIDTH + 0.25;
-    for side in [-1.0, 1.0] {
-        let at = Vec3::new(side * jamb_x, DOOR_HEIGHT / 2.0, HALF_DEPTH - 0.4);
-        b.block(Vec3::new(0.5, DOOR_HEIGHT, 0.5), 0.6, &paints.hazard, at);
-    }
-    let drum = Cylinder::new(0.55, 2.0 * DOOR_HALF_WIDTH + 1.0);
-    let at = Vec3::new(0.0, DOOR_HEIGHT + 0.6, HALF_DEPTH - 0.8);
-    b.add(
-        drum.into(),
-        &paints.steel,
-        Transform::from_translation(at).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
-    );
-}
-
-/// A roof truss across the hall at `z`: two chords braced in a zigzag.
-fn spawn_truss(b: &mut Builder, paints: &Paints, z: f32, half_span: f32, chord: f32) {
-    let rise = HEIGHT - 0.25 - chord;
-    let span = 2.0 * half_span;
-    b.block(
-        Vec3::new(span, 0.3, 0.25),
-        1.0,
-        &paints.steel,
-        Vec3::new(0.0, chord, z),
-    );
-    b.block(
-        Vec3::new(span, 0.3, 0.25),
-        1.0,
-        &paints.steel,
-        Vec3::new(0.0, chord + rise, z),
-    );
-    let panels = 10;
-    let panel = span / panels as f32;
-    let brace = Vec2::new(panel, rise);
-    for i in 0..panels {
-        let x = -half_span + panel * (i as f32 + 0.5);
-        let tilt = if i % 2 == 0 { 1.0 } else { -1.0 } * brace.to_angle();
-        let at = Transform::from_xyz(x, chord + rise / 2.0, z)
-            .with_rotation(Quat::from_rotation_z(tilt));
-        b.add(
-            Cuboid::new(brace.length(), 0.12, 0.12).into(),
-            &paints.steel,
-            at,
-        );
-    }
-}
-
-/// The overhead gantry crane: runways along the walls, a yellow bridge
-/// across the hall, a trolley, and a hook hanging over the floor.
-fn spawn_crane(b: &mut Builder, paints: &Paints) {
-    let rail_x = HALF_WIDTH - 0.9;
-    let bridge_z = 7.0;
-    let yellow = &paints.yellow;
-    for side in [-1.0, 1.0] {
-        let rail = Vec3::new(0.45, 0.7, 2.0 * HALF_DEPTH - 1.0);
-        b.block(
-            rail,
-            1.0,
-            &paints.steel,
-            Vec3::new(side * rail_x, CRANE_HEIGHT, 0.0),
-        );
-        let truck = Vec3::new(0.8, 0.6, 2.4);
-        b.block(
-            truck,
-            1.0,
-            yellow,
-            Vec3::new(side * rail_x, CRANE_HEIGHT + 0.65, bridge_z),
-        );
-    }
-    let bridge = Vec3::new(2.0 * rail_x, 0.9, 0.8);
-    b.block(
-        bridge,
-        1.0,
-        yellow,
-        Vec3::new(0.0, CRANE_HEIGHT + 0.8, bridge_z),
-    );
-    let trolley_x = 3.0;
-    let trolley = Vec3::new(1.6, 0.7, 1.4);
-    b.block(
-        trolley,
-        1.0,
-        yellow,
-        Vec3::new(trolley_x, CRANE_HEIGHT + 1.6, bridge_z),
-    );
-
-    let hook_y = 3.4;
-    let cable_top = CRANE_HEIGHT + 0.35;
-    let cable = Cylinder::new(0.03, cable_top - hook_y);
-    let at = Transform::from_xyz(trolley_x, (cable_top + hook_y) / 2.0, bridge_z);
-    b.add(cable.into(), &paints.steel, at);
-    b.block(
-        Vec3::new(0.5, 0.7, 0.3),
-        1.0,
-        yellow,
-        Vec3::new(trolley_x, hook_y, bridge_z),
-    );
-    let hook = Transform::from_xyz(trolley_x, hook_y - 0.6, bridge_z)
-        .with_rotation(Quat::from_rotation_x(FRAC_PI_2));
-    b.add(Torus::new(0.12, 0.2).into(), &paints.steel, hook);
-}
-
-/// Pendant lamps hanging from the trusses, each lighting a pool of floor.
-fn spawn_lamps(b: &mut Builder, paints: &Paints) {
-    let chord = HEIGHT - 1.75;
-    let lamp_y = 8.4;
-    for (x, z) in [
-        (0.0, 12.0),
-        (-9.0, 6.0),
-        (9.0, 6.0),
-        (0.0, 0.0),
-        (-8.0, -12.0),
-        (8.0, -12.0),
+fn spawn_lamps(
+    commands: &mut Commands,
+    hall: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    let steel = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.20, 0.21, 0.22),
+        metallic: 0.58,
+        perceptual_roughness: 0.67,
+        ..default()
+    });
+    let lens = materials.add(StandardMaterial {
+        emissive: LinearRgba::rgb(1.0, 0.88, 0.72) * 42_000.0,
+        ..default()
+    });
+    let housing = meshes.add(Cuboid::new(0.98, 0.14, 0.37));
+    let panel = meshes.add(Cuboid::new(0.83, 0.024, 0.27));
+    for (x, z, roof) in [
+        (0.0, 9.0, 20.60),
+        (-8.6, 6.0, 18.00),
+        (8.6, 6.0, 18.00),
+        (-8.2, -9.6, 14.13),
+        (8.2, -9.6, 14.13),
+        (0.0, -13.0, 15.88),
     ] {
-        b.add(
-            Cylinder::new(0.02, chord - lamp_y).into(),
-            &paints.steel,
-            Transform::from_xyz(x, (chord + lamp_y) / 2.0, z),
-        );
-        b.add(
-            Cone::new(0.5, 0.4).into(),
-            &paints.steel,
-            Transform::from_xyz(x, lamp_y, z),
-        );
-        b.add(
-            Cylinder::new(0.4, 0.02).into(),
-            &paints.bulb,
-            Transform::from_xyz(x, lamp_y - 0.2, z),
-        );
-        let light = Vec3::new(x, lamp_y - 0.26, z);
-        b.commands.spawn((
+        let y = roof * 0.68;
+        let lamp = Vec3::new(x, y, z);
+        commands.spawn((
+            Mesh3d(meshes.add(Cylinder::new(0.026, roof - y))),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_xyz(x, (y + roof) * 0.5, z),
+            ChildOf(hall),
+        ));
+        commands.spawn((
+            Mesh3d(housing.clone()),
+            MeshMaterial3d(steel.clone()),
+            Transform::from_translation(lamp),
+            ChildOf(hall),
+        ));
+        commands.spawn((
+            Mesh3d(panel.clone()),
+            MeshMaterial3d(lens.clone()),
+            Transform::from_translation(lamp - Vec3::Y * 0.072),
+            ChildOf(hall),
+        ));
+        commands.spawn((
             SpotLight {
-                color: Color::srgb(1.0, 0.95, 0.86),
-                intensity: 2.0e7,
-                range: 15.0,
-                radius: 0.36,
-                outer_angle: 0.60,
-                inner_angle: 0.27,
-                shadow_maps_enabled: z == 12.0,
+                color: if z < 0.0 {
+                    Color::srgb(1.0, 0.84, 0.67)
+                } else {
+                    Color::srgb(1.0, 0.95, 0.86)
+                },
+                intensity: 2.45e5 * y * y,
+                range: y + 9.0,
+                radius: 0.34,
+                outer_angle: 0.58,
+                inner_angle: 0.25,
+                shadow_maps_enabled: z == 9.0,
                 ..default()
             },
-            Transform::from_translation(light).looking_at(light - Vec3::Y, Vec3::Z),
-            ChildOf(b.hall),
+            Transform::from_translation(lamp - Vec3::Y * 0.12).looking_to(Vec3::NEG_Y, Vec3::Z),
+            ChildOf(hall),
         ));
     }
-}
-
-/// Warm service lights pull the corners and the sides of the doorway out of shadow.
-fn spawn_wall_lamps(b: &mut Builder, paints: &Paints) {
-    for side in [-1.0, 1.0] {
-        for (x, z, floor_x, floor_z) in [
-            (15.6, -15.0, 15.0, -13.9),
-            (15.6, 14.0, 15.0, 13.0),
-            (8.4, 17.7, 7.3, 15.5),
-        ] {
-            let mount = Vec3::new(side * x, 4.1, z);
-            let bracket = if x > DOOR_HALF_WIDTH + 4.0 {
-                Vec3::X * side * (HALF_WIDTH - x)
-            } else {
-                Vec3::Z * (HALF_DEPTH - z)
-            };
-            b.block(
-                bracket.abs() + Vec3::splat(0.12),
-                0.6,
-                &paints.steel,
-                mount + bracket * 0.5,
-            );
-            b.block(Vec3::new(0.68, 0.18, 0.36), 0.75, &paints.steel, mount);
-            b.block(
-                Vec3::new(0.57, 0.025, 0.26),
-                0.6,
-                &paints.bulb,
-                mount - Vec3::Y * 0.1,
-            );
-            b.commands.spawn((
-                SpotLight {
-                    color: Color::srgb(1.0, 0.81, 0.61),
-                    intensity: 3.8e6,
-                    range: 7.8,
-                    radius: 0.18,
-                    outer_angle: 0.56,
-                    inner_angle: 0.20,
-                    ..default()
-                },
-                Transform::from_translation(mount - Vec3::Y * 0.15)
-                    .looking_at(Vec3::new(side * floor_x, 0.0, floor_z), Vec3::Z),
-                ChildOf(b.hall),
-            ));
-        }
-    }
-}
-
-/// Yellow lane lines, a hazard band across the door, and drain grates.
-fn spawn_markings(b: &mut Builder, paints: &Paints) {
-    let paint_y = 0.005;
-    let lane_start = YARD_OFFSET + 10.5;
-    let lane = HALF_DEPTH - 1.0 - lane_start;
-    for x in [-DOOR_HALF_WIDTH + 0.5, DOOR_HALF_WIDTH - 0.5] {
-        let at = Vec3::new(x, paint_y, lane_start + lane / 2.0);
-        b.block(Vec3::new(0.15, 0.01, lane), 1.0, &paints.yellow, at);
-    }
-    let across = Vec3::new(2.0 * HALF_WIDTH - 2.0, 0.01, 0.15);
-    b.block(
-        across,
-        1.0,
-        &paints.yellow,
-        Vec3::new(0.0, paint_y, lane_start),
-    );
-    let band = Vec3::new(2.0 * DOOR_HALF_WIDTH, 0.01, 0.8);
-    b.block(
-        band,
-        0.6,
-        &paints.hazard,
-        Vec3::new(0.0, paint_y, HALF_DEPTH - 0.7),
-    );
-    for z in [4.0, 9.0] {
-        b.block(
-            Vec3::new(1.2, 0.01, 1.2),
-            1.0,
-            &paints.grate,
-            Vec3::new(0.0, paint_y, z),
-        );
-    }
-}
-
-/// A box mesh with world-scale UVs, so textures tile every `tile` meters
-/// on every face instead of stretching.
-fn tiled_box(size: Vec3, tile: f32) -> Mesh {
-    let mut mesh = Mesh::from(Cuboid::from_size(size));
-    let uvs: Vec<[f32; 2]> = match (
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION),
-        mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
-    ) {
-        (
-            Some(VertexAttributeValues::Float32x3(positions)),
-            Some(VertexAttributeValues::Float32x3(normals)),
-        ) => positions
-            .iter()
-            .zip(normals)
-            .map(|(p, n)| {
-                let uv = if n[0].abs() > 0.5 {
-                    [p[2], -p[1]]
-                } else if n[1].abs() > 0.5 {
-                    [p[0], p[2]]
-                } else {
-                    [p[0], -p[1]]
-                };
-                [uv[0] / tile, uv[1] / tile]
-            })
-            .collect(),
-        _ => return mesh,
-    };
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    if let Err(error) = mesh.generate_tangents() {
-        warn!("hall mesh without tangents: {error}");
-    }
-    mesh
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::player::vehicle::{blocked, vehicle_distance};
-    use crate::world::{Body, push_out};
+    use crate::world::{Body, SPAWN, push_out};
 
     #[test]
-    fn hall_walls_block_the_stalker_but_the_door_lets_it_out() {
-        let body = Body {
-            radius: 0.3,
-            height: 1.8,
-        };
+    fn imported_walls_block_both_approaches_and_leave_the_door_open() {
         let walls = Collider(WALLS.as_slice());
         let at = GlobalTransform::IDENTITY;
-        let push = |point: Vec2| push_out(point, 0.0, body, [(&walls, &at)]);
-        for wall in [
-            Vec2::new(HALF_WIDTH - 0.2, 0.0),
-            Vec2::new(0.0, -HALF_DEPTH + 0.2),
-            Vec2::new(HALF_WIDTH - 2.0, HALF_DEPTH - 0.2),
-        ] {
-            assert_ne!(push(wall), wall, "walked through the wall at {wall}");
-        }
-        for door in [
-            Vec2::new(0.0, HALF_DEPTH),
-            Vec2::new(DOOR_HALF_WIDTH - 1.0, HALF_DEPTH),
-        ] {
-            assert_eq!(push(door), door, "door blocked at {door}");
+        for height in [0.5, 1.8] {
+            let body = Body {
+                radius: 0.35,
+                height,
+            };
+            let push = |p: Vec2| push_out(p * MODEL_SCALE, 0.0, body, [(&walls, &at)]);
+            for p in [
+                Vec2::new(0.375, 0.0),
+                Vec2::new(-0.425, 0.0),
+                Vec2::new(0.0, -0.476),
+                Vec2::new(0.32, DOOR_Z),
+            ] {
+                assert_ne!(push(p), p * MODEL_SCALE, "wall clear at {p}");
+            }
+            for p in [Vec2::new(0.0, DOOR_Z), Vec2::new(0.25, DOOR_Z)] {
+                assert_eq!(push(p), p * MODEL_SCALE, "door blocked at {p}");
+            }
         }
     }
 
     #[test]
-    fn catwalk_feet_block_even_a_crawling_stalker() {
-        let body = Body {
-            radius: 0.35,
-            height: 0.5,
-        };
-        let yard = Collider(YARD);
-        let transform = GlobalTransform::from_scale(Vec3::splat(YARD_SCALE));
-        let push = |point| push_out(point, 0.0, body, [(&yard, &transform)]);
-        for foot in [Vec2::new(-0.28, 0.47), Vec2::new(0.43, -0.15)] {
-            let point = foot * YARD_SCALE;
-            assert_ne!(push(point), point, "could crawl under a post at {point}");
-        }
-        assert_eq!(push(Vec2::ZERO), Vec2::ZERO);
-    }
-
-    #[test]
-    fn parked_vehicle_can_drive_straight_out_without_blocking_the_spawn() {
+    fn player_spawn_and_vehicle_route_clear_the_imported_model() {
         let walls = Collider(WALLS.as_slice());
         let hall = GlobalTransform::IDENTITY;
-        let yard = Collider(YARD);
-        let at = GlobalTransform::from(
-            Transform::from_xyz(0.0, 0.0, YARD_OFFSET).with_scale(Vec3::splat(YARD_SCALE)),
-        );
         let mut vehicle = parked_vehicle(Vec3::ZERO);
+        let spawn = Vec2::from(SPAWN) - Vec2::from(BASE);
+        assert!(DOOR_Z * MODEL_SCALE - spawn.y > 5.0);
+        let start = Vec3::new(spawn.x, 0.0, spawn.y);
+        assert!(vehicle_distance(&vehicle, start) > 0.35);
+        assert_eq!(
+            push_out(
+                spawn,
+                0.0,
+                Body {
+                    radius: 0.35,
+                    height: 1.8
+                },
+                [(&walls, &hall)]
+            ),
+            spawn
+        );
         let forward = vehicle.rotation * Vec3::Z;
-        for z in [crate::world::SPAWN.1 - BASE.1, HALF_DEPTH] {
-            assert!(vehicle_distance(&vehicle, Vec3::new(0.0, 0.0, z)) > 0.35);
-        }
-        while vehicle.translation.z <= HALF_DEPTH + 3.0 {
+        while vehicle.translation.z <= MODEL_SCALE * 0.4932 + 3.0 {
             assert!(
-                !blocked(&vehicle, [(&walls, &hall), (&yard, &at)].into_iter()),
-                "vehicle blocked at {}",
+                !blocked(&vehicle, [(&walls, &hall)].into_iter()),
+                "blocked at {}",
                 vehicle.translation
             );
             vehicle.translation += forward * 0.2;

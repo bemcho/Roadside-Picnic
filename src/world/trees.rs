@@ -9,10 +9,11 @@ use bevy::prelude::*;
 use crate::assets;
 
 use super::collision::{Collider, Pillar};
-use super::terrain::{HALF_SIZE, SPAWN, Terrain, lattice_hash, value_noise};
+use super::hydrology::Wetlands;
+use super::terrain::{HALF_SIZE, SPAWN, TILE_SIZE, Terrain, lattice_hash, smoothstep, value_noise};
 
 /// Spacing of the placement grid; each cell holds at most one stand.
-const CELL: f32 = 22.0;
+const CELL: f32 = 16.0;
 
 /// Fixed seed so the forest is the same on every run.
 const SEED: u32 = 0x7EE5_1979;
@@ -67,16 +68,16 @@ pub(super) struct TreeSite {
 
 /// Scatters trees: one candidate per grid cell, jittered, kept where both
 /// the land suits trees and a low-frequency grove field is dense.
-pub(super) fn tree_sites(terrain: &Terrain) -> Vec<TreeSite> {
-    let cells = (2.0 * HALF_SIZE / CELL) as i32;
+pub(super) fn tree_sites(terrain: &Terrain, tile: IVec2) -> Vec<TreeSite> {
+    let cells = (TILE_SIZE / CELL) as i32;
     let limit = HALF_SIZE - EDGE_MARGIN;
     let mut sites = Vec::new();
 
-    for iz in 0..cells {
-        for ix in 0..cells {
+    for iz in (tile.y * cells)..((tile.y + 1) * cells) {
+        for ix in (tile.x * cells)..((tile.x + 1) * cells) {
             let roll = |n: u32| lattice_hash(ix, iz, SEED + n);
-            let x = -HALF_SIZE + (ix as f32 + roll(0)) * CELL;
-            let z = -HALF_SIZE + (iz as f32 + roll(1)) * CELL;
+            let x = (ix as f32 + roll(0)) * CELL;
+            let z = (iz as f32 + roll(1)) * CELL;
             if x.abs() > limit || z.abs() > limit {
                 continue;
             }
@@ -84,12 +85,18 @@ pub(super) fn tree_sites(terrain: &Terrain) -> Vec<TreeSite> {
                 continue;
             }
             let grove = value_noise(x / 45.0, z / 45.0, SEED + 2);
-            let density = terrain.woodland_at(x, z) * smoothstep(0.3, 0.7, grove);
+            let wet = Wetlands::at(x, z).wetness();
+            let density =
+                terrain.woodland_at(x, z) * smoothstep(0.3, 0.7, grove) * (0.28 + wet * 0.57);
             if roll(2) >= density {
                 continue;
             }
 
-            let model = (roll(3) * MODELS.len() as f32) as usize;
+            let model = if wet > 0.46 || roll(3) < 0.19 {
+                if roll(6) < 0.65 { 2 } else { 3 }
+            } else {
+                usize::from(roll(6) > 0.43)
+            };
             let scale = SCALE_RANGE.0 + (SCALE_RANGE.1 - SCALE_RANGE.0) * roll(4);
             let rotation = Quat::from_rotation_y(roll(5) * TAU);
             let contacts = ground_contacts(MODELS[model].1)
@@ -142,6 +149,9 @@ pub(super) fn spawn_trees(
     asset_server: &AssetServer,
     sites: &[TreeSite],
 ) {
+    if sites.is_empty() {
+        return;
+    }
     let scenes = MODELS.map(|(path, _)| asset_server.load(format!("{path}#Scene0")));
     for site in sites {
         let (_, pillars) = MODELS[site.model];
@@ -153,21 +163,29 @@ pub(super) fn spawn_trees(
     }
 }
 
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::terrain::TILE_RADIUS;
+
+    fn all_sites(terrain: &Terrain) -> Vec<TreeSite> {
+        (-TILE_RADIUS..TILE_RADIUS)
+            .flat_map(|x| {
+                (-TILE_RADIUS..TILE_RADIUS).flat_map(move |z| tree_sites(terrain, IVec2::new(x, z)))
+            })
+            .collect()
+    }
 
     #[test]
     fn forest_is_deterministic_and_sized_for_the_zone() {
         let terrain = Terrain::new();
-        let sites = tree_sites(&terrain);
-        assert_eq!(sites, tree_sites(&terrain));
-        assert!((25..=90).contains(&sites.len()), "{} stands", sites.len());
+        let sites = all_sites(&terrain);
+        assert_eq!(sites, all_sites(&terrain));
+        assert!(
+            (300..=2200).contains(&sites.len()),
+            "{} stands",
+            sites.len()
+        );
         assert!(
             sites
                 .iter()
@@ -186,7 +204,7 @@ mod tests {
     #[test]
     fn stands_avoid_spawn_road_and_quarry_and_never_float() {
         let terrain = Terrain::new();
-        for site in tree_sites(&terrain) {
+        for site in all_sites(&terrain) {
             let p = site.transform.translation;
             assert!(
                 p.xz().distance(Vec2::from(SPAWN)) >= SPAWN_CLEARING,

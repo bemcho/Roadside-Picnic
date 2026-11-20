@@ -93,7 +93,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let biome = clamp(in.color.r, 0.0, 1.0);
     let patches = patch_noise(region) * 0.68 + patch_noise(p.xz / 1.25 + 32.0) * 0.32;
     let spread = patches + (earth_height - grass_height) * 0.16 + (biome - 0.5) * 0.34;
-    let exposed = mix(biome, smoothstep(0.42, 0.58, spread), 0.74);
+    let exposed = mix(biome, smoothstep(0.42, 0.58, spread), mix(0.74, 0.27, smoothstep(0.55, 1.0, biome)));
 
     // Offset along the surface so stones appear raised, without moving the collision mesh.
     let height = mix(grass_height, earth_height, exposed);
@@ -115,6 +115,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let luminance = dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722));
     albedo = mix(albedo, vec3<f32>(luminance) * vec3<f32>(0.72, 0.74, 0.70), ash * 0.9);
     albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.48, 0.56, 0.42), wetness);
+    let alpine = smoothstep(32.0, 100.0, p.y);
+    albedo = mix(albedo, vec3<f32>(0.62, 0.81, 1.06) * (luminance + 0.038), alpine * 0.74);
+    let snowline = 112.0 + patch_noise(p.xz / 24.0) * 29.0 + (1.0 - normal.y) * 72.0;
+    let snow = smoothstep(snowline - 12.0, snowline + 13.0, p.y);
+    albedo = mix(albedo, vec3<f32>(0.65, 0.71, 0.75) * (0.76 + 0.24 * patches), snow);
     pbr_input.material.base_color = vec4<f32>(albedo * in.color.a, 1.0);
 
     // Packed maps: red AO, green roughness, blue height.
