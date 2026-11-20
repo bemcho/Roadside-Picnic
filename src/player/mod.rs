@@ -1,7 +1,10 @@
 //! Player: the stalker, their camera, and movement controls.
 
+use std::f32::consts::PI;
+
 use bevy::prelude::*;
 
+use crate::assets::MODELS;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{SPAWN, Terrain};
 
@@ -31,31 +34,23 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-fn spawn_player(
-    mut commands: Commands,
-    terrain: Res<Terrain>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain: Res<Terrain>) {
     let ground_y = terrain.height_at(SPAWN.0, SPAWN.1);
 
-    // The stalker: a plain capsule for now, to be replaced with a real model.
+    // The stalker: glTF model from assets/models/stalker.glb, facing away
+    // from the camera at spawn.
     commands.spawn((
         Player { move_speed: 5.0 },
-        Mesh3d(meshes.add(Capsule3d::new(0.4, 1.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.7, 0.65, 0.4),
-            ..default()
-        })),
-        Transform::from_xyz(SPAWN.0, ground_y + 1.0, SPAWN.1),
+        WorldAssetRoot(asset_server.load(format!("{MODELS}/stalker.glb#Scene0"))),
+        Transform::from_xyz(SPAWN.0, ground_y, SPAWN.1).with_rotation(Quat::from_rotation_y(PI)),
     ));
 
     // Camera perched above and behind the stalker, with the Zone's haze.
     commands.spawn((
         PlayerCamera,
         Camera3d::default(),
-        Transform::from_xyz(SPAWN.0, ground_y + 6.0, SPAWN.1 + 8.0)
-            .looking_at(Vec3::new(SPAWN.0, ground_y + 1.0, SPAWN.1), Vec3::Y),
+        Transform::from_xyz(SPAWN.0, ground_y + 4.0, SPAWN.1 + 9.0)
+            .looking_at(Vec3::new(SPAWN.0, ground_y + 1.2, SPAWN.1), Vec3::Y),
         DistanceFog {
             color: Color::srgb(0.62, 0.64, 0.58),
             falloff: FogFalloff::Linear {
@@ -73,7 +68,8 @@ fn despawn_player(mut commands: Commands, player_entities: PlayerEntities) {
     }
 }
 
-/// WASD movement along the ground plane.
+/// WASD movement along the ground plane. The stalker turns to face the
+/// direction of travel.
 fn move_player(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -98,6 +94,14 @@ fn move_player(
     }
 
     let direction = direction.normalize_or_zero();
+
+    // The model faces +Z at rotation 0; yaw so it faces the travel direction.
+    if direction != Vec3::ZERO {
+        let target = Quat::from_rotation_y(direction.x.atan2(direction.z));
+        let blend = 1.0 - (-10.0 * time.delta_secs()).exp();
+        transform.rotation = transform.rotation.slerp(target, blend);
+    }
+
     transform.translation += direction * player.move_speed * time.delta_secs();
 }
 
@@ -113,7 +117,7 @@ fn follow_player(
         return;
     };
 
-    let target = player_transform.translation + Vec3::new(0.0, 5.0, 8.0);
+    let target = player_transform.translation + Vec3::new(0.0, 4.0, 9.0);
     camera_transform.translation = target;
-    camera_transform.look_at(player_transform.translation, Vec3::Y);
+    camera_transform.look_at(player_transform.translation + Vec3::Y * 1.2, Vec3::Y);
 }

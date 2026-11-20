@@ -54,6 +54,22 @@ cargo update
 
 > **Always prefer `cargo check` during iterative edits.** It is several times faster than a full build.
 
+### Hot reloading (development only)
+
+Never enable these features in release or `wasm32` builds. Pass them on the command line rather than
+adding them to the default features in `Cargo.toml`.
+
+- **Assets:** the `file_watcher` feature makes the `AssetServer` watch `assets/` and reload textures,
+  shaders, meshes, audio and scenes on save, with no restart. Run
+  `cargo run --features bevy/file_watcher`. Only assets loaded from file paths reload; procedural
+  terrain and synthesized audio are rebuilt only on restart.
+- **Rust code:** the `hotpatching` feature patches edits made inside existing system bodies (logic,
+  math, constants) into the running game. It uses Dioxus Subsecond via the Dioxus CLI:
+  `dx serve --hotpatch --features bevy/hotpatching`. New types, component or resource changes, system
+  signature changes and newly registered systems still need a normal rebuild.
+- **Fast rebuilds:** add `bevy/dynamic_linking` (for example,
+  `cargo run --features bevy/dynamic_linking,bevy/file_watcher`) to cut incremental compile times.
+
 ## Architecture Conventions
 
 This project follows idiomatic Bevy ECS. Read these before adding code:

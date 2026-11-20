@@ -7,12 +7,19 @@
 //! the project's forward-looking contract for asset locations. When a module
 //! starts using one, the compiler will demand the attribute be removed.
 
+pub const TERRAIN_SHADER: &str = "shaders/terrain.wesl";
+pub const TERRAIN_GRASS_ALBEDO: &str = "textures/terrain/grass_albedo.jpg";
+pub const TERRAIN_GRASS_NORMAL: &str = "textures/terrain/grass_normal.jpg";
+pub const TERRAIN_GRASS_ARM: &str = "textures/terrain/grass_arm.jpg";
+pub const TERRAIN_EARTH_ALBEDO: &str = "textures/terrain/earth_albedo.jpg";
+pub const TERRAIN_EARTH_NORMAL: &str = "textures/terrain/earth_normal.jpg";
+pub const TERRAIN_EARTH_ARM: &str = "textures/terrain/earth_arm.jpg";
+
 /// Root folder for textures and materials.
 #[expect(dead_code)]
 pub const TEXTURES: &str = "textures";
 
-/// Root folder for 3D models.
-#[expect(dead_code)]
+/// Root folder for 3D models (the stalker lives here as `models/stalker.glb`).
 pub const MODELS: &str = "models";
 
 /// Root folder for audio files.

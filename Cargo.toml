@@ -10,7 +10,7 @@ edition = "2024"
 # needed for ambient sound, `wav` for the synthesized WAV loop. Audio on
 # Linux requires ALSA dev libraries (`libasound2-dev`), which are installed
 # on this machine.
-bevy = { version = "0.20.1", default-features = false, features = ["3d", "ui", "audio", "wav"] }
+bevy = { version = "0.20.1", default-features = false, features = ["3d", "ui", "audio", "wav", "jpeg"] }
 
 # --- Release build: prioritize runtime speed. ---
 [profile.release]
