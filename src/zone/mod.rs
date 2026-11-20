@@ -71,14 +71,13 @@ fn spawn_zone_objects(
         ..default()
     });
 
-    // A scatter of placeholder artifacts, resting on the terrain:
-    // overgrown flats, the scorched bald hill, and the quarry floor.
+    // Keep the flats' artifacts on the verge of the junction, not in the driving lane.
     for (x, z) in [
-        (6.0, 3.0),
+        (4.0, 20.0),
         (-7.0, 5.0),
-        (4.0, -8.0),
+        (0.0, -15.0),
         (-5.0, -4.0),
-        (9.0, -6.0),
+        (19.0, -3.0),
         (-75.0, -55.0), // bald hill
         (78.0, 44.0),   // quarry floor
     ] {
@@ -96,7 +95,7 @@ fn spawn_zone_objects(
 
     // A couple of placeholder anomalies: one in the flats, one at the very
     // bottom of the quarry, where the Zone is said to be meanest.
-    for (x, z) in [(-3.0, 7.0), (8.0, -8.0), (70.0, 40.0)] {
+    for (x, z) in [(-13.0, 10.0), (21.0, -12.0), (70.0, 40.0)] {
         let y = terrain.height_at(x, z) + 0.6;
         commands.entity(root).with_children(|zone| {
             zone.spawn((

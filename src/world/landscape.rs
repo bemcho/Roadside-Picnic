@@ -331,7 +331,6 @@ mod tests {
                         pose: Transform::IDENTITY,
                     }],
                     undergrowth: vec![],
-                    plants: vec![],
                 },
             )]
             .into_iter()

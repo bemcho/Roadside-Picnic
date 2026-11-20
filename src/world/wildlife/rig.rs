@@ -10,6 +10,7 @@ use bevy::mesh::{
 use bevy::prelude::*;
 
 use super::movement::{Wildlife, smooth};
+use super::mutants::is_mutant;
 use super::{Kind, Terrain, detail_range};
 
 #[cfg(test)]
@@ -52,6 +53,61 @@ mod tests {
     }
 
     #[test]
+    fn grazing_mutants_lift_their_muzzles_clear_of_uphill_ground() {
+        let terrain = Terrain::new();
+        let routes = super::super::mutants::routes(&terrain);
+        for kind in [Kind::Bovine, Kind::Fleshdeer] {
+            let bone = bones(kind)
+                .into_iter()
+                .find(|bone| matches!(bone, Bone::GrazingHead { .. }))
+                .expect("grazing head");
+            let Bone::GrazingHead { neck, muzzle } = bone else {
+                unreachable!()
+            };
+            let mut would_clip = 0;
+            for &(_, route) in routes.iter().filter(|(species, _)| *species == kind) {
+                let motion = Wildlife::new(kind, route, None);
+                let mut pose = motion.initial_pose(&terrain);
+                for at in route.circuit() {
+                    let uphill = -terrain.normal_at(at.x, at.y).xz();
+                    pose.translation = Vec3::new(at.x, terrain.mesh_height_at(at) + 0.012, at.y);
+                    pose.rotation = Quat::from_rotation_y(uphill.x.atan2(uphill.y));
+                    let rest = pose.transform_point(muzzle);
+                    if rest.y < terrain.mesh_height_at(rest.xz()) {
+                        would_clip += 1;
+                        let head = bone_pose(bone, &motion, &pose, Transform::IDENTITY, &terrain);
+                        let world = pose.transform_point(head.transform_point(muzzle - neck));
+                        let clearance = world.y - terrain.mesh_height_at(world.xz());
+                        assert!(clearance >= 0.015, "{kind:?} at {at}: {clearance} m");
+                    }
+                }
+            }
+            assert!(would_clip > 0, "test terrain didn't challenge {kind:?}");
+        }
+    }
+
+    #[test]
+    fn pouncing_wolf_lifts_front_paws_without_floating_hind_paws() {
+        let terrain = Terrain::new();
+        let mut motion = Wildlife::new(Kind::Frostwolf, route(), None);
+        let at = motion.initial_pose(&terrain);
+        motion.lunge = 1.0;
+        let body = carrier(&motion);
+        for bone in bones(Kind::Frostwolf) {
+            if let Bone::Foot { tip, .. } = bone {
+                let foot = bone_pose(bone, &motion, &at, body, &terrain);
+                let toe = at.transform_point(body.transform_point(foot.translation));
+                let clearance = toe.y - terrain.mesh_height_at(toe.xz()) - tip.y * at.scale.y;
+                if tip.z > 0.2 {
+                    assert!(clearance > 0.18);
+                } else {
+                    assert!(clearance.abs() < 0.09);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn mesh_wings_move_in_sync_without_flapping_the_whole_model() {
         let terrain = Terrain::new();
         for kind in [Kind::Hawk, Kind::Skyglider] {
@@ -91,6 +147,10 @@ enum Bone {
         radius: f32,
     },
     Head(Vec3),
+    GrazingHead {
+        neck: Vec3,
+        muzzle: Vec3,
+    },
     Wing {
         shoulder: Vec3,
         side: f32,
@@ -103,7 +163,7 @@ impl Bone {
         match self {
             Self::Body => Vec3::ZERO,
             Self::Foot { tip, .. } => tip,
-            Self::Head(neck) => neck,
+            Self::Head(neck) | Self::GrazingHead { neck, .. } => neck,
             Self::Wing { shoulder, .. } => shoulder,
         }
     }
@@ -123,6 +183,7 @@ impl Bone {
             Self::Head(neck) => {
                 smooth((point.z - neck.z) / 0.14) * smooth((point.y - neck.y + 0.08) / 0.13)
             }
+            Self::GrazingHead { neck, .. } => smooth((point.z - neck.z) / 0.17),
             Self::Wing { shoulder, side, .. } => {
                 let wide = side * (point.x - shoulder.x);
                 smooth(wide / 0.18) * (1.0 - smooth((point.z - 0.24 - wide) / 0.13))
@@ -211,6 +272,40 @@ fn bones(kind: Kind) -> Vec<Bone> {
                 )
             }));
         }
+        Kind::Bovine => bones.extend([
+            foot([-0.128, 0.018, 0.108], [-0.126, 0.32, 0.075], 0.00, 0.098),
+            foot([0.101, 0.015, 0.063], [0.087, 0.32, 0.033], 0.50, 0.100),
+            foot([-0.151, 0.022, -0.307], [-0.127, 0.34, -0.24], 0.75, 0.110),
+            foot([0.011, 0.022, -0.316], [0.017, 0.34, -0.245], 0.25, 0.106),
+            Bone::GrazingHead {
+                neck: Vec3::new(0.0, 0.36, 0.15),
+                muzzle: Vec3::new(0.01, 0.018, 0.46),
+            },
+        ]),
+        Kind::Fleshdeer => bones.extend([
+            foot([-0.080, 0.020, -0.007], [-0.035, 0.42, 0.003], 0.00, 0.065),
+            foot([0.165, 0.019, -0.003], [0.107, 0.42, -0.009], 0.50, 0.075),
+            foot([-0.171, 0.023, -0.434], [-0.078, 0.44, -0.386], 0.75, 0.085),
+            foot([0.129, 0.019, -0.411], [0.049, 0.44, -0.389], 0.25, 0.090),
+            Bone::GrazingHead {
+                neck: Vec3::new(0.025, 0.39, 0.109),
+                muzzle: Vec3::new(0.04, 0.022, 0.41),
+            },
+        ]),
+        Kind::Mutt => bones.extend([
+            foot([-0.058, 0.017, 0.366], [-0.085, 0.36, 0.11], 0.00, 0.124),
+            foot([0.201, 0.016, 0.154], [0.174, 0.36, 0.074], 0.50, 0.130),
+            foot([-0.154, 0.017, -0.308], [-0.117, 0.33, -0.248], 0.75, 0.118),
+            foot([0.140, 0.018, -0.289], [0.092, 0.33, -0.248], 0.25, 0.120),
+            Bone::Head(Vec3::new(0.02, 0.46, 0.29)),
+        ]),
+        Kind::Chimera => bones.extend([
+            foot([-0.160, 0.015, 0.293], [-0.134, 0.37, 0.153], 0.00, 0.109),
+            foot([0.132, 0.015, 0.205], [0.102, 0.37, 0.074], 0.50, 0.119),
+            foot([-0.170, 0.021, -0.181], [-0.126, 0.36, -0.175], 0.75, 0.110),
+            foot([0.100, 0.022, -0.270], [0.072, 0.36, -0.213], 0.25, 0.106),
+            Bone::Head(Vec3::new(-0.02, 0.42, 0.28)),
+        ]),
     }
     bones
 }
@@ -403,6 +498,9 @@ pub(super) fn stride(kind: Kind, run: f32) -> f32 {
         Kind::Hexadeer => 0.19 + 0.28 * run,
         Kind::Heron => 0.24,
         Kind::Owl => 0.14,
+        Kind::Bovine => 0.16,
+        Kind::Fleshdeer => 0.19,
+        Kind::Mutt | Kind::Chimera => 0.19 + 0.27 * run,
         _ => 0.19,
     }
 }
@@ -418,6 +516,19 @@ fn step_cycle(t: f32) -> (f32, f32) {
 }
 
 fn carrier(motion: &Wildlife) -> Transform {
+    if is_mutant(motion.kind) {
+        let strike = motion.lunge.max(0.0);
+        let brace = (-motion.lunge).max(0.0);
+        let rock = (motion.gait * TAU).sin() * motion.pace;
+        return Transform::from_xyz(0.0, 0.065 * strike - 0.056 * brace, 0.0).with_rotation(
+            Quat::from_euler(
+                EulerRot::XYZ,
+                -0.13 * strike + 0.12 * brace + rock * motion.run * 0.055,
+                0.0,
+                rock * 0.023,
+            ),
+        );
+    }
     let (pitch, offset) = match motion.kind {
         Kind::Hawk => (0.54, 0.28),
         Kind::Raven | Kind::Sparrow => (0.81, 0.33),
@@ -454,15 +565,34 @@ fn bone_pose(
     terrain: &Terrain,
 ) -> Transform {
     match bone {
-        Bone::Body => Transform::from_xyz(
-            0.0,
-            (motion.gait * 2.0 * TAU).cos() * 0.009 * motion.pace * (1.0 - motion.air),
-            0.0,
-        ),
-        Bone::Foot { tip, hip, phase, .. } => {
+        Bone::Body => {
+            let breath = if is_mutant(motion.kind) {
+                (motion.age * 2.5 + motion.phase()).sin() * 0.006 * (1.0 - motion.pace)
+            } else {
+                0.0
+            };
+            Transform::from_xyz(
+                0.0,
+                (motion.gait * 2.0 * TAU).cos() * 0.009 * motion.pace * (1.0 - motion.air) + breath,
+                0.0,
+            )
+        }
+        Bone::Foot {
+            tip, hip, phase, ..
+        } => {
+            let phase = match motion.kind {
+                Kind::Mutt | Kind::Chimera if tip.z < 0.0 => phase - 0.25 * motion.run,
+                _ => phase,
+            };
             let (stride_phase, lift) = step_cycle(motion.gait + phase);
-            let pounce = if motion.kind == Kind::Frostwolf && tip.z > 0.2 { motion.lunge } else { 0.0 };
-            let forward = stride_phase * stride(motion.kind, motion.run) * motion.pace + 0.08 * pounce;
+            let front = match motion.kind {
+                Kind::Mutt | Kind::Chimera => tip.z > 0.0,
+                Kind::Frostwolf => tip.z > 0.2,
+                _ => false,
+            };
+            let pounce = if front { motion.lunge.max(0.0) } else { 0.0 };
+            let forward =
+                stride_phase * stride(motion.kind, motion.run) * motion.pace + 0.08 * pounce;
             let foot_at = at.transform_point(body.transform_point(tip + Vec3::Z * forward));
             let ground = if motion.air < 0.6 {
                 (terrain.mesh_height_at(foot_at.xz()) + 0.012 + tip.y * at.scale.y - foot_at.y)
@@ -470,21 +600,28 @@ fn bone_pose(
             } else {
                 0.0
             };
-            let mut posed = tip + Vec3::new(
-                0.0,
-                ground.clamp(-0.15, 0.15) + lift * (0.075 + motion.run * 0.065) * motion.pace + 0.10 * pounce,
-                forward,
-            );
+            let mut posed = tip
+                + Vec3::new(
+                    0.0,
+                    ground.clamp(-0.15, 0.15)
+                        + lift * (0.075 + motion.run * 0.065) * motion.pace
+                        + 0.10 * pounce,
+                    forward,
+                );
             // Hold the foot's height but limit stride reach so the skin cannot stretch a planted leg.
             let rest = tip - hip;
-            let reach = (1.12 * rest.length_squared() - (posed.x - hip.x).powi(2) - (posed.y - hip.y).powi(2))
-                .max(0.0).sqrt();
+            let reach = (1.12 * rest.length_squared()
+                - (posed.x - hip.x).powi(2)
+                - (posed.y - hip.y).powi(2))
+            .max(0.0)
+            .sqrt();
             posed.z = posed.z.clamp(hip.z - reach, hip.z + reach);
             posed = posed.lerp(tip + Vec3::new(0.0, 0.19, -0.15), motion.air);
             let leg = posed - hip;
             let bend = (rest.y * leg.z - rest.z * leg.y).atan2(rest.y * leg.y + rest.z * leg.z);
-            Transform::from_translation(posed)
-                .with_rotation(Quat::from_rotation_x(bend * 0.35 + lift * 0.11 * motion.pace))
+            Transform::from_translation(posed).with_rotation(Quat::from_rotation_x(
+                bend * 0.35 + lift * 0.11 * motion.pace,
+            ))
         }
         Bone::Head(neck) => {
             let scan = (motion.age * 1.2 + motion.phase()).sin()
@@ -493,14 +630,40 @@ fn bone_pose(
                 } else {
                     0.04
                 };
-            let bite = motion.lunge * 0.29;
+            let bite = motion.lunge.max(0.0) * 0.29;
+            let brace = (-motion.lunge).max(0.0) * 0.12;
             Transform::from_translation(neck + Vec3::new(0.0, -bite * 0.10, bite * 0.23))
                 .with_rotation(Quat::from_euler(
                     EulerRot::YXZ,
                     scan,
-                    bite - motion.run * 0.09,
+                    bite + brace - motion.run * 0.09,
                     0.0,
                 ))
+        }
+        Bone::GrazingHead { neck, muzzle } => {
+            let time = motion.age + motion.phase();
+            let yaw = (time * 1.2).sin() * 0.09 + motion.look;
+            let rest_pitch = (time * 2.4).sin() * 0.035 - motion.attention * 0.49;
+            let chin = muzzle - neck;
+            let clearance = |pitch| {
+                let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+                let world = at.transform_point(body.transform_point(neck + rotation * chin));
+                let rise = (terrain.mesh_height_at(world.xz()) + 0.04 - world.y) / at.scale.y;
+                (rotation, rise)
+            };
+            // These meshes were sculpted with their muzzles close to the ground.
+            let mut pitch = rest_pitch;
+            let (mut rotation, mut rise) = clearance(pitch);
+            for _ in 0..2 {
+                let raised = (pitch - rise.max(0.0) / chin.z).max(rest_pitch - 0.65);
+                if pitch - raised < 0.002 {
+                    break;
+                }
+                pitch = raised;
+                (rotation, rise) = clearance(pitch);
+            }
+            let correction = body.rotation.inverse() * Vec3::Y * rise.clamp(0.0, 0.10);
+            Transform::from_translation(neck + correction).with_rotation(rotation)
         }
         Bone::Wing {
             shoulder,

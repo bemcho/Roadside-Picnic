@@ -8,7 +8,9 @@ use bevy::prelude::*;
 
 use crate::assets;
 
+use super::canopy::near_landmark;
 use super::collision::{Collider, Pillar};
+use super::cordon::reserve_scenery;
 use super::hydrology::Wetlands;
 use super::scenery::TREE_DENSITY;
 use super::terrain::{HALF_SIZE, SPAWN, TILE_SIZE, Terrain, lattice_hash, smoothstep, value_noise};
@@ -43,7 +45,7 @@ const ROOT_SINK: f32 = 0.15;
 /// Pillars at or below this height (model units) touch the ground; the stand
 /// is sunk so none of them floats.
 const GROUND_CONTACT: f32 = 0.01;
-pub(super) const DEAD_FOREST: usize = 0;
+const DEAD_FOREST: usize = 0;
 
 /// Extracted fauna models and their collision pillars.
 const MODELS: [(&str, &[Pillar]); 4] = [
@@ -81,7 +83,11 @@ pub(super) fn tree_sites(terrain: &Terrain, tile: IVec2) -> Vec<TreeSite> {
             let roll = |n: u32| lattice_hash(ix, iz, SEED + n);
             let x = (ix as f32 + roll(0)) * CELL;
             let z = (iz as f32 + roll(1)) * CELL;
-            if x.abs() > limit || z.abs() > limit {
+            if x.abs() > limit
+                || z.abs() > limit
+                || !near_landmark(Vec2::new(x, z))
+                || reserve_scenery(Vec2::new(x, z), FOOTPRINT * SCALE_RANGE.1)
+            {
                 continue;
             }
             if Vec2::new(x - SPAWN.0, z - SPAWN.1).length() < SPAWN_CLEARING {
@@ -186,19 +192,15 @@ mod tests {
     }
 
     #[test]
-    fn forest_is_deterministic_and_sized_for_the_zone() {
+    fn imported_stands_stay_in_landmark_groves() {
         let terrain = Terrain::new();
         let sites = all_sites(&terrain);
         assert_eq!(sites, all_sites(&terrain));
-        assert!(
-            (250..=2200).contains(&sites.len()),
-            "{} stands",
-            sites.len()
-        );
+        assert!((12..=140).contains(&sites.len()), "{} stands", sites.len());
         assert!(
             sites
                 .iter()
-                .all(|site| { (SCALE_RANGE.0..=SCALE_RANGE.1).contains(&site.transform.scale.x) })
+                .all(|site| near_landmark(site.transform.translation.xz()))
         );
         for model in 0..MODELS.len() {
             assert!(sites.iter().any(|site| site.model == model));

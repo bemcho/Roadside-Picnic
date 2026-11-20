@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
-use super::{BASE, HALF_SIZE, Kind, Route, Terrain};
+use super::mutants::Mutant;
+use super::sound::MotionSound;
+use super::{BASE, CreatureSound, Cue, HALF_SIZE, Kind, Route, Terrain};
 
 const REACH: f32 = 2.15;
 const STRIKE_TIME: f32 = 0.60;
@@ -67,6 +69,8 @@ pub(in crate::world) struct Wildlife {
     pub(super) run: f32,
     pub(super) air: f32,
     pub(super) lunge: f32,
+    pub(super) look: f32,
+    pub(super) attention: f32,
 }
 
 impl Wildlife {
@@ -85,6 +89,8 @@ impl Wildlife {
             run: 0.0,
             air: flight.map_or(0.0, |flight| flight.lift(0.0)),
             lunge: 0.0,
+            look: 0.0,
+            attention: 0.0,
         }
     }
 
@@ -97,6 +103,12 @@ impl Wildlife {
 
     pub(super) fn phase(&self) -> f32 {
         self.route.phase
+    }
+
+    pub(super) fn call_seed(&self) -> f32 {
+        let cell = self.route.center.as_ivec2();
+        let salt = ((self.phase() + 10.0) * 247.0) as u32;
+        crate::world::terrain::lattice_hash(cell.x, cell.y, 0xCA11 + salt + self.kind as u32)
     }
 
     fn height(&self, terrain: &Terrain, at: Vec2) -> f32 {
@@ -135,6 +147,18 @@ impl Wildlife {
         } else {
             self.step_ground(entity, terrain, from, patrol, dt, nearby)
         };
+        self.apply_travel(pose, terrain, at, facing, dt);
+    }
+
+    pub(super) fn apply_travel(
+        &mut self,
+        pose: &mut Transform,
+        terrain: &Terrain,
+        at: Vec2,
+        facing: Vec2,
+        dt: f32,
+    ) {
+        let from = pose.translation.xz();
         let delta = at - from;
         let speed = delta.length() / dt;
         let fade = 1.0 - (-10.0 * dt).exp();
@@ -280,8 +304,9 @@ pub(in crate::world) struct Animal {
 pub(in crate::world) fn move_wildlife(
     time: Res<Time>,
     terrain: Res<Terrain>,
-    mut animals: Query<(Entity, &mut Transform, &mut Wildlife)>,
+    mut animals: Query<(Entity, &mut Transform, &mut Wildlife), Without<Mutant>>,
     mut nearby: Local<Vec<Animal>>,
+    mut sounds: MessageWriter<CreatureSound>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
@@ -299,12 +324,48 @@ pub(in crate::world) fn move_wildlife(
             })
     }));
     for (entity, mut pose, mut motion) in &mut animals {
+        let before = MotionSound::before(pose.translation, &motion);
+        let prior = motion.hunt;
         motion.step(entity, &mut pose, &terrain, dt, &nearby);
+        let target = motion.hunt.target();
+        let pursued = motion.kind == Kind::Hexadeer
+            && nearby
+                .iter()
+                .any(|animal| animal.hunt.target() == Some(entity));
+        before.emit(
+            pose.translation,
+            &motion,
+            target.is_some() || pursued,
+            &mut sounds,
+        );
+        let voice = pose.translation + Vec3::Y * 0.65;
+        match (prior, motion.hunt) {
+            (Hunt::Strike { .. }, _) => {}
+            (_, Hunt::Strike { .. }) => {
+                sounds.write(CreatureSound::new(motion.kind, Cue::Strike, voice));
+            }
+            (_, Hunt::Chase { .. }) if prior.target().is_none() => {
+                sounds.write(CreatureSound::new(motion.kind, Cue::Growl, voice));
+            }
+            _ => {}
+        }
+        if prior.target().is_none()
+            && let Some(prey) = nearby.iter().find(|animal| Some(animal.entity) == target)
+        {
+            let at = prey.at;
+            let height = terrain.mesh_height_at(at);
+            sounds.write(CreatureSound::new(
+                prey.kind,
+                Cue::Alarm,
+                Vec3::new(at.x, height + 0.85, at.y),
+            ));
+        }
     }
 }
 
 pub(super) fn dry_ground(terrain: &Terrain, at: Vec2) -> bool {
     (at - Vec2::from(BASE)).abs().max_element() > 22.0
+        && !crate::world::cordon::near_wall_or_checkpoint(at, 1.0)
         && terrain.water_depth_at(at.x, at.y) <= 0.02
         && terrain.normal_at(at.x, at.y).y > 0.87
 }
@@ -340,6 +401,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(Time::<()>::default())
             .insert_resource(terrain.clone())
+            .add_message::<CreatureSound>()
             .add_systems(Update, move_wildlife);
         let ids = [Kind::Frostwolf, Kind::Hexadeer].map(|kind| {
             let (_, route) = ground
@@ -356,6 +418,7 @@ mod tests {
         let mut fled = false;
         let mut lunged = false;
         let mut recovered = false;
+        let mut encounter_sounds = Vec::new();
         for _ in 0..980 {
             app.world_mut()
                 .resource_mut::<Time>()
@@ -378,6 +441,13 @@ mod tests {
             fled |= deer.run > 0.5;
             lunged |= wolf.lunge > 0.8;
             recovered |= lunged && matches!(wolf.hunt, Hunt::Recover { .. }) && wolf.lunge == 0.0;
+            encounter_sounds.extend(
+                app.world_mut()
+                    .resource_mut::<Messages<CreatureSound>>()
+                    .drain()
+                    .filter(|sound| matches!(sound.cue, Cue::Alarm | Cue::Growl | Cue::Strike))
+                    .map(|sound| (sound.kind, sound.cue)),
+            );
             if recovered {
                 break;
             }
@@ -386,6 +456,14 @@ mod tests {
             chased && fled && lunged && recovered,
             "{chased} {fled} {lunged} {recovered}"
         );
+        assert_eq!(
+            encounter_sounds,
+            [
+                (Kind::Frostwolf, Cue::Growl),
+                (Kind::Hexadeer, Cue::Alarm),
+                (Kind::Frostwolf, Cue::Strike)
+            ]
+        );
     }
 
     #[test]
@@ -393,20 +471,56 @@ mod tests {
         let terrain = Terrain::new();
         let (kind, route, flight) = flight_routes(&terrain)[0];
         assert!(flight.lands);
-        let mut bird = Wildlife::new(kind, route, Some(flight));
-        let mut transform = bird.initial_pose(&terrain);
+        let bird = Wildlife::new(kind, route, Some(flight));
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default())
+            .insert_resource(terrain.clone())
+            .add_message::<CreatureSound>()
+            .add_systems(Update, move_wildlife);
+        let id = app
+            .world_mut()
+            .spawn((bird.initial_pose(&terrain), bird))
+            .id();
+        let mut before = app.world().get::<Transform>(id).unwrap().translation.xz();
         let mut on_ground = 0.0;
+        let (mut steps, mut calls, mut landings, mut takeoffs) = (0, 0, 0, 0);
         for _ in 0..720 {
-            let before = transform.translation.xz();
-            bird.step(Entity::PLACEHOLDER, &mut transform, &terrain, 0.05, &[]);
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_millis(50));
+            app.update();
+            let bird = app.world().get::<Wildlife>(id).unwrap();
+            let air = bird.air;
+            let transform = app.world().get::<Transform>(id).unwrap();
             let at = transform.translation.xz();
             let dy = transform.translation.y - terrain.mesh_height_at(at);
             if (22.1..30.9).contains(&bird.age) {
                 assert!(dy < 0.014 && bird.air == 0.0 && bird.pace > 0.7);
                 on_ground += before.distance(at);
             }
+            for sound in app
+                .world_mut()
+                .resource_mut::<Messages<CreatureSound>>()
+                .drain()
+            {
+                match sound.cue {
+                    Cue::Step(_) => {
+                        assert!(air <= 0.025 && before.distance(at) > 0.001);
+                        steps += 1;
+                    }
+                    Cue::Call => calls += 1,
+                    Cue::Land => landings += 1,
+                    Cue::Wings => takeoffs += 1,
+                    other => panic!("unexpected raven cue {other:?}"),
+                }
+            }
+            before = at;
         }
+        let bird = app.world().get::<Wildlife>(id).unwrap();
+        let transform = app.world().get::<Transform>(id).unwrap();
         assert!(on_ground > 3.0 && bird.air > 0.99);
+        assert!(steps > 4 && calls >= 2);
+        assert_eq!((landings, takeoffs), (1, 1));
         assert!(
             (transform.rotation * Vec3::Z)
                 .xz()

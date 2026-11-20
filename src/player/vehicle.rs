@@ -317,7 +317,7 @@ fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool
     })
 }
 
-pub(super) fn drive_vehicle(
+pub(crate) fn drive_vehicle(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,

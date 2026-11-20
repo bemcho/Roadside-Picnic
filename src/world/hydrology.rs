@@ -8,7 +8,7 @@ pub(super) const WATER_LEVEL: f32 = -3.0;
 pub(super) const LAKE: Vec2 = Vec2::new(-365.0, 327.0);
 pub(super) const SWAMP: Vec2 = Vec2::new(-165.0, 238.0);
 const WEST_BASIN: Vec2 = Vec2::new(-2020.0, 333.0);
-const FORD_X: f32 = 35.0;
+pub(super) const FORD_X: f32 = 35.0;
 
 pub(super) struct Wetlands {
     river: f32,

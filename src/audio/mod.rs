@@ -1,6 +1,7 @@
 //! Game audio, synthesized once and played through the system's default output.
 
 mod ambience;
+mod creatures;
 mod effects;
 
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use crate::player::{
     vehicle::{Driving, Vehicle},
 };
 use crate::states::{AppState, InGamePhase, SplashPhase};
+use crate::world::CreatureSound;
 
 const SAMPLE_RATE: u32 = 22_050;
 
@@ -35,7 +37,8 @@ impl AudioMode {
 impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AudioMode>()
-            .add_systems(Startup, load_sounds)
+            .add_message::<CreatureSound>()
+            .add_systems(Startup, (load_sounds, creatures::load_creature_sounds))
             .add_systems(OnEnter(AppState::Loading), start_hangar_audio)
             .add_systems(OnEnter(SplashPhase::Ready), play_ready_signal)
             .add_systems(OnEnter(AppState::InGame), start_ambience)
@@ -43,7 +46,8 @@ impl Plugin for GameAudioPlugin {
                 Last,
                 (
                     toggle_mute,
-                    (play_actions, sync_engine).run_if(in_state(AppState::InGame)),
+                    (play_actions, sync_engine, creatures::play_creature_sounds)
+                        .run_if(in_state(AppState::InGame)),
                 )
                     .chain(),
             );

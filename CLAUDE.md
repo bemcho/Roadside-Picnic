@@ -39,8 +39,11 @@ The upper-right in-game HUD shows the smoothed frame rate.
 ## Procedural content
 
 - **Terrain** (`src/world/terrain.rs`) is a deterministic 3.44 km square built in
-  128 m chunks: mountains, rolling hills, the old quarry and bald hill, and dirt tracks
-  from the hangar to the quarry and the main river ford. Heights are sampled
+  128 m chunks: mountains, rolling hills, the old quarry and bald hill. The
+  graded dirt network (`src/world/roads.rs`) leads from the hangar checkpoint
+  to the quarry, bald hill, swamp overlook, lakeshore, and main river ford.
+  The same network keeps vegetation off the lanes and paints a world-space
+  gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
   in other plugins. `Terrain::mesh_height_at` tracks the rendered surface near
   the player. Ground tiles swap from 2 m to 8 m sampling at distance, with
@@ -57,33 +60,27 @@ The upper-right in-game HUD shows the smoothed frame rate.
   between drier hummocks. Use `Terrain::water_depth_at` for traversal. Walk and
   drive through the shallows; deep water stops you. The main dirt track crosses
   at a vehicle-depth ford.
-- **Scenery** (`src/world/scenery.rs`): deterministic pine groves and
-  textured rock outcrops are drawn in chunk batches. The sapling, broadleaf,
-  tall conifer, birch, and dead tree in `assets/models/trees/` also grow around
-  the hangar. Their GLBs use one ~500-triangle primitive each: simplified
+- **Scenery** (`src/world/scenery.rs`): procedural pine groves and textured rock
+  outcrops are drawn in chunk batches. Imported saplings, broadleaves, tall
+  conifers, birches, and dead trees (`assets/models/trees/`) are reserved for
+  the hangar and named landmark groves. Their GLBs use one ~500-triangle primitive each: simplified
   textured wood and, for living trees, cutout crown faces baked from the
   supplied models.
   `src/world/canopy.rs` fits the roots and trunks, limits
   shadows to nearby trees, and sways some living trees without moving their
   colliders. Individual trees can randomly snap and fall while in view; their
   collision goes away immediately and they don't respawn during the run.
-  Individual trees and dead-tree stands use one quarter of their original
-  density. Colliders and undergrowth stream in a 3×3 chunk neighborhood.
+  Colliders and undergrowth stream in a 3×3 chunk neighborhood.
   Camera frusta and distance ranges cull scenery detail independently of
   collision and leave the terrain skyline visible.
 - **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
   shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
-  The five shared GLBs live in `assets/models/plants/`; regenerate them with
-  glTF Transform `simplify --ratio 0.002 --error 0.005` (`--ratio 0.0015
-  --error 0.018` for shrub and glowweed), `resize --width 1024 --height 1024`,
-  and `tangents` (all with `--vertex-layout separate`), then
-  `tools/prepare_plant_asset.py`.
-  The script grounds roots, bakes the glowweed mask, and removes the thornbush's
-  detached display plaque. Five staggered scatter layers grow all five types
-  at roughly five times their base density, with additional beds around the
-  hangar. Plants don't block movement; only original-layer hogweed casts shadows.
-- **Fauna** (`src/world/trees.rs`): four extracted, textured models
-  (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
+  Each existing placement seeds a patch of up to ten procedural plants. The
+  game builds small, frustum-culled mesh batches as chunks stream in, not an
+  entity per plant. Ground cover has no collision or shadows. The rear and
+  sides of the hangar form a dense shelterbelt; the central yard and roads stay clear.
+- **Fauna** (`src/world/trees.rs`): four extracted, textured vegetation clusters
+  (`assets/models/fauna/*.glb`) are scattered only around landmarks, on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
   the treeline and on the bald hill). Rebuild them from the packed source with
   `tools/prepare_fauna_asset.py <source.glb> assets/models/fauna assets/textures/fauna`
@@ -96,6 +93,18 @@ The upper-right in-game HUD shows the smoothed frame rate.
   each extracted cluster is centered with its lowest point at ground level.
   Regenerate each collision pillar file with `tools/trim_tree_base.py` whenever
   the source geometry changes.
+- **Cordons** (`src/world/cordon.rs`): the enclosed hangar yard has a level
+  staging area, with the checkpoint on the west side of a 16 m opening on the
+  existing north road. A separate continuous wall marks the Zone boundary;
+  the panels follow the rendered terrain and stay above the water at river
+  crossings. Wall meshes and solid collision stream in nearby terrain tiles.
+  Keep the staging area and driveway clear; the tree and bush shelterbelt is
+  concentrated behind the hangar and along the sides.
+  For `assets/models/sites/`, simplify the wall with glTF Transform `simplify
+  --ratio 0.24 --error 0.016`; resize the wall to 1536 px and the checkpoint to
+  2048 px, bake tangents with `--vertex-layout separate`, then ground with
+  `tools/prepare_plant_asset.py`. Re-sample `src/world/pillars/site_checkpoint.rs`
+  with `tools/trim_tree_base.py` after editing the checkpoint geometry.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
@@ -108,6 +117,14 @@ The upper-right in-game HUD shows the smoothed frame rate.
   lands, walks, and takes off again while the frostwolf occasionally chases
   and lunges at the hexadeer. The chameleon stays on its modeled perch.
   Wildlife is decorative and has no collision.
+- **Mutants** (`src/world/wildlife/mutants.rs`): bovines, chimeras, fleshdeer,
+  and mutts occupy dry, biome-weighted patrol pockets across the Zone. Bovines
+  give the stalker room; fleshdeer investigate up close; mutts and chimeras
+  pursue on foot, brace before lunging, and retreat to their patrols. A landed
+  strike respawns the stalker. The cordoned hangar yard and the occupied vehicle are safe.
+  The original textured models use the shared wildlife rig, with species-specific
+  foot and head weights. Rebuild the GLBs in `assets/models/mutants/` with the
+  wildlife pipeline above, using `simplify --ratio 0.003 --error 0.009`.
 - **Base** (`src/world/base.rs`): the imported steel hangar
   (`assets/models/base/hangar.glb`) sits on a levelled pad at `terrain::BASE`.
   The north (+Z) door stays open for the vehicle, and runs and respawns start at
@@ -144,7 +161,11 @@ The upper-right in-game HUD shows the smoothed frame rate.
   under (crawling body is 0.5 m). Give every new solid model a `Collider`.
 - **Audio** (`src/audio/`) is synthesized at startup: looping Zone ambience,
   gait-dependent footsteps, jump and landing, vehicle doors, and a speed-driven
-  engine. Playback follows the system's default audio output.
+  engine. Wildlife calls, footfalls, takeoff/landing, and fight cues originate
+  from the creature's world position; nearby sounds pan with the camera and fade
+  with distance. Footfalls follow accepted travel and attack sounds follow
+  chase, lunge, and hit events. M mutes both positional and non-positional audio.
+  Playback follows the system's default audio output.
 - **Stalker model** (`assets/models/stalker.glb`) is a Tripo mesh auto-rigged in headless
   Blender by `tools/rig_stalker.py`, which also bakes the Crawl/Idle/Jump/Run/Walk clips
   (glTF animation indices 0–4, sorted by name). `src/player/animation.rs` cross-fades

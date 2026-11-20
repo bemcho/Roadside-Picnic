@@ -3,9 +3,11 @@
 mod base;
 mod canopy;
 mod collision;
+mod cordon;
 mod hydrology;
 mod landscape;
 mod plants;
+mod roads;
 mod scenery;
 mod terrain;
 mod terrain_material;
@@ -17,6 +19,7 @@ mod wildlife;
 pub(crate) use collision::STEP_HEIGHT;
 pub use collision::{Body, Collider, Pillar, push_out};
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
+pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
 
 use bevy::camera::visibility::VisibilityRange;
 use bevy::light::atmosphere::ScatteringMedium;
@@ -73,8 +76,8 @@ impl Plugin for WorldPlugin {
                 prepare_landscape,
                 load_landscape_materials,
                 canopy::preload_canopies,
-                plants::preload_plants,
                 wildlife::preload_wildlife,
+                cordon::preload_cordon,
             ),
         )
         .add_systems(
@@ -86,16 +89,21 @@ impl Plugin for WorldPlugin {
                 plants::prepare_plant_materials,
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
+                cordon::prepare_cordon,
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
         .add_systems(
             PreUpdate,
-            (stream_scenery, stream_ground_detail).run_if(in_state(AppState::InGame)),
+            (stream_scenery, stream_ground_detail, cordon::stream_cordon)
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             PostUpdate,
-            (wildlife::move_wildlife, wildlife::pose_wildlife)
+            (
+                (wildlife::move_wildlife, wildlife::move_mutants),
+                wildlife::pose_wildlife,
+            )
                 .chain()
                 .before(TransformSystems::Propagate)
                 .run_if(in_state(InGamePhase::Running)),
@@ -144,13 +152,18 @@ fn range_scene_meshes(
 fn load_landscape_materials(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    terrain: Res<Terrain>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     commands.insert_resource(LandscapeMaterials {
-        terrain: materials.add(load_terrain_material(&asset_server)),
+        terrain: materials.add(load_terrain_material(
+            &asset_server,
+            &terrain.roads,
+            &mut images,
+        )),
         water: water_materials.add(water::material()),
         foliage: standard.add(scenery::foliage_material(&mut images)),
     });
@@ -214,6 +227,8 @@ fn despawn_world(mut commands: Commands, roots: Query<Entity, With<WorldRoot>>) 
         commands.entity(root).despawn();
     }
     commands.remove_resource::<Scenery>();
+    commands.remove_resource::<cordon::Cordon>();
+    commands.remove_resource::<plants::PlantMaterials>();
     commands.remove_resource::<tree_fall::TreeBreakClock>();
 }
 

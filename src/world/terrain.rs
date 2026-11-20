@@ -10,6 +10,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use super::hydrology::Wetlands;
+use super::roads::RoadNetwork;
 
 const PLAYABLE_HALF_METRES: u32 = 1720;
 /// The traversal limit; visible terrain extends past it.
@@ -63,12 +64,12 @@ impl TerrainGrid {
 const SEED: u32 = 0x1972_2016;
 
 /// The quarry: an elliptical pit dug out of the hills.
-const QUARRY_CENTER: (f32, f32) = (70.0, 40.0);
+pub(super) const QUARRY_CENTER: (f32, f32) = (70.0, 40.0);
 const QUARRY_RADII: (f32, f32) = (45.0, 30.0);
 const QUARRY_DEPTH: f32 = 14.0;
 
 /// The bald hill: a scorched, bare mound.
-const BALD_CENTER: (f32, f32) = (-75.0, -55.0);
+pub(super) const BALD_CENTER: (f32, f32) = (-75.0, -55.0);
 const BALD_HEIGHT: f32 = 12.0;
 const BALD_SIGMA: f32 = 22.0;
 
@@ -77,24 +78,9 @@ const MARSH_CENTER: (f32, f32) = (-35.0, 78.0);
 const MARSH_RADIUS: f32 = 48.0;
 const MARSH_DEPTH: f32 = 2.5;
 
-const ROAD_HALF_WIDTH: f32 = 5.0;
-type RoadLeg = (Vec2, Vec2);
-const OLD_TRACK: RoadLeg = (Vec2::ZERO, Vec2::new(36.0, 20.0));
-const ROADS: [RoadLeg; 7] = [
-    OLD_TRACK,
-    (Vec2::new(40.0, -104.0), Vec2::new(39.0, -68.0)),
-    (Vec2::new(39.0, -68.0), Vec2::new(25.0, -33.0)),
-    (Vec2::new(25.0, -33.0), Vec2::ZERO),
-    (Vec2::ZERO, Vec2::new(-12.0, 122.0)),
-    (Vec2::new(-12.0, 122.0), Vec2::new(35.0, 245.0)),
-    (Vec2::new(35.0, 245.0), Vec2::new(35.0, 408.0)),
-];
-
 /// The stalkers' base: an old industrial hangar in the southern lowlands, on a
 /// levelled pad (wide enough for the whole hall) that fades back into the hills.
 pub const BASE: (f32, f32) = (40.0, -128.0);
-const BASE_PAD_RADIUS: f32 = 27.0;
-const BASE_PAD_BLEND: f32 = 12.0;
 
 /// Where the stalker starts and respawns: inside the hangar, facing its bay.
 pub const SPAWN: (f32, f32) = (40.0, -123.0);
@@ -103,13 +89,13 @@ pub const SPAWN: (f32, f32) = (40.0, -123.0);
 /// called — insert as a resource so any system can sample the ground.
 #[derive(Resource, Clone)]
 pub struct Terrain {
-    road_heights: [(f32, f32); ROADS.len()],
+    pub(super) roads: RoadNetwork,
 }
 
 impl Terrain {
     pub fn new() -> Self {
         Self {
-            road_heights: ROADS.map(|(a, b)| (hills(a.x, a.y), hills(b.x, b.y))),
+            roads: RoadNetwork::new(|at| hills(at.x, at.y)),
         }
     }
 
@@ -227,9 +213,8 @@ impl Terrain {
         h += -cut + lip + floor_noise;
 
         // Road: the track is flattened toward a gentle ramp between its ends.
-        if let Some((leg, t, mask)) = road_at(x, z) {
-            let (a, b) = self.road_heights[leg];
-            h = lerp(h, lerp(a, b, t), mask * 0.85);
+        if let Some(road) = self.roads.sample(Vec2::new(x, z)) {
+            h = lerp(h, road.height, road.mask() * 0.85);
         }
         h = wetlands.soil_height(x, z, h);
 
@@ -242,15 +227,16 @@ impl Terrain {
         h
     }
 
-    /// 1.0 on the base's levelled pad, fading to 0.0 around it.
+    /// 1.0 in the level staging yard, fading into the surrounding terrain.
     pub(super) fn base_mask(&self, x: f32, z: f32) -> f32 {
-        let distance = Vec2::new(x - BASE.0, z - BASE.1).length();
-        smoothstep(BASE_PAD_RADIUS + BASE_PAD_BLEND, BASE_PAD_RADIUS, distance)
+        super::cordon::yard_grade(Vec2::new(x, z))
     }
 
     /// 1.0 on the road centerline, 0.0 away from it.
     pub(super) fn road_mask(&self, x: f32, z: f32) -> f32 {
-        road_at(x, z).map_or(0.0, |(_, _, weight)| weight)
+        self.roads
+            .sample(Vec2::new(x, z))
+            .map_or(0.0, |road| road.mask())
     }
 
     pub(super) fn normal_at(&self, x: f32, z: f32) -> Vec3 {
@@ -423,31 +409,6 @@ fn edge_segment(at: Vec2) -> Option<(Vec2, Vec2, f32)> {
     }
     let a = at - axis * offset;
     Some((a, a + axis * step, offset / step))
-}
-
-fn road_at(x: f32, z: f32) -> Option<(usize, f32, f32)> {
-    if !(-27.0..49.0).contains(&x) || !(-118.0..421.0).contains(&z) {
-        return None;
-    }
-    let at = Vec2::new(x, z);
-    let mut closest = None;
-    let mut best = (ROAD_HALF_WIDTH + 6.0).powi(2);
-    for (i, (a, b)) in ROADS.into_iter().enumerate() {
-        let leg = b - a;
-        let t = ((at - a).dot(leg) / leg.length_squared()).clamp(0.0, 1.0);
-        let d2 = at.distance_squared(a + leg * t);
-        if d2 < best {
-            best = d2;
-            closest = Some((i, t));
-        }
-    }
-    closest.map(|(i, t)| {
-        (
-            i,
-            t,
-            smoothstep(ROAD_HALF_WIDTH + 6.0, ROAD_HALF_WIDTH, best.sqrt()),
-        )
-    })
 }
 
 fn hills(x: f32, z: f32) -> f32 {
@@ -632,9 +593,8 @@ mod tests {
     #[test]
     fn road_entrance_meets_the_surrounding_hills() {
         let terrain = Terrain::new();
-        let (start, _) = OLD_TRACK;
-        let road_height = terrain.height_at(start.x, start.y);
-        let hill_height = hills(start.x, start.y);
+        let road_height = terrain.height_at(0.0, 0.0);
+        let hill_height = hills(0.0, 0.0);
         assert!(
             (road_height - hill_height).abs() < 0.1,
             "road entrance should not form a raised platform"

@@ -12,8 +12,9 @@ use crate::player::Player;
 
 use super::canopy::{self, ForestTree};
 use super::collision::{Collider, Pillar};
+use super::cordon::{reserve_scenery, shelterbelt};
 use super::hydrology::Wetlands;
-use super::plants::{self, PlantModels, PlantSite};
+use super::plants::{self, PlantMaterials};
 use super::terrain::{TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise};
 use super::trees::{self, TreeSite};
 
@@ -87,7 +88,6 @@ pub(super) struct Sites {
     pub solids: Vec<Site>,
     pub canopies: Vec<ForestTree>,
     pub undergrowth: Vec<TreeSite>,
-    pub plants: Vec<PlantSite>,
 }
 
 impl Sites {
@@ -150,14 +150,18 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
                 + Vec2::new(lerp(0.12, 0.88, roll(0)), lerp(0.12, 0.88, roll(1))))
                 * cell;
             let chance = roll(2);
-            if terrain.road_mask(p.x, p.y) > 0.02 || terrain.base_mask(p.x, p.y) > 0.05 {
+            if reserve_scenery(p, 5.0)
+                || terrain.road_mask(p.x, p.y) > 0.02
+                || terrain.base_mask(p.x, p.y) > 0.05
+                || (kind == Kind::Pine && shelterbelt(p) > 0.0)
+            {
                 continue;
             }
             let y = terrain.height_at(p.x, p.y);
             let scale = match kind {
                 Kind::Pine => {
-                    if chance
-                        > TREE_DENSITY * forest_density(p.x, p.y) * terrain.woodland_at(p.x, p.y)
+                    let grove = forest_density(p.x, p.y).max(0.48 * canopy::landmark_grove(p));
+                    if chance > TREE_DENSITY * grove * terrain.woodland_at(p.x, p.y)
                         || terrain.water_depth_at(p.x, p.y) > 0.0
                     {
                         continue;
@@ -224,7 +228,6 @@ pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>
         solids,
         canopies,
         undergrowth: trees::tree_sites(terrain, tile),
-        plants: plants::plant_sites(terrain, tile),
     };
     let forest = sites.forest_mesh(terrain, tile);
     (sites, forest, stone.finish(false))
@@ -244,7 +247,8 @@ pub(super) fn stream_scenery(
     mut commands: Commands,
     player: Single<&Transform, With<Player>>,
     server: Res<AssetServer>,
-    plants: Res<PlantModels>,
+    terrain: Res<Terrain>,
+    (plants, mut meshes): (Res<PlantMaterials>, ResMut<Assets<Mesh>>),
     mut scenery: ResMut<Scenery>,
 ) {
     let center = (player.translation.xz() / TILE_SIZE).floor().as_ivec2();
@@ -285,7 +289,7 @@ pub(super) fn stream_scenery(
                         objects.spawn((tree.pose, tree.collider(), StandingTree::Imported(*tree)));
                     }
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
-                    plants::spawn_plants(objects, &plants, &sites.plants);
+                    plants::spawn_plants(objects, &terrain, tile, &plants, &mut meshes);
                 })
                 .id();
             scenery.active.insert(tile, entity);
@@ -511,20 +515,14 @@ mod tests {
     fn the_zone_has_about_a_quarter_of_its_original_standing_trees() {
         let terrain = Terrain::new();
         let mut living = 0;
-        let mut dead = 0;
         for z in -6..6 {
             for x in -6..6 {
                 let tile = IVec2::new(x, z);
                 living += sites_for_tile(&terrain, tile, 8.0, Kind::Pine).len();
-                dead += trees::tree_sites(&terrain, tile)
-                    .iter()
-                    .filter(|site| site.model == trees::DEAD_FOREST)
-                    .count();
             }
         }
-        // The unthinned seed placed 4,705 individual trees and 117 dead stands.
-        assert!((1115..=1235).contains(&living), "{living} individual trees");
-        assert!((24..=37).contains(&dead), "{dead} dead stands");
+        // The unthinned seed placed 4,705 individual trees.
+        assert!((1115..=1280).contains(&living), "{living} individual trees");
     }
 
     #[test]
@@ -558,26 +556,24 @@ mod tests {
     }
 
     #[test]
-    fn groves_mix_all_five_species_with_grounded_solid_trunks() {
-        use canopy::Species;
-
+    fn imported_trees_replace_pines_only_at_landmarks_and_keep_solid_trunks() {
         let terrain = Terrain::new();
-        let mut species = [false; Species::ALL.len()];
-        for tile in [
-            IVec2::new(-2, -1),
-            IVec2::new(-2, 0),
-            IVec2::new(1, 0),
-            IVec2::new(4, -2),
-            IVec2::new(-4, 3),
-        ] {
+        let mut imported = 0;
+        let fixtures = (-4..=1).flat_map(|x| (-2..=3).map(move |z| IVec2::new(x, z)));
+        for tile in fixtures.chain([IVec2::new(4, -2), IVec2::new(-12, 3)]) {
             let pines = sites_for_tile(&terrain, tile, 8.0, Kind::Pine);
             let (sites, _, _) = build_tile(&terrain, tile);
             let procedural = sites.solids.iter().filter(|s| s.kind == Kind::Pine).count();
-            assert!(procedural > 0);
-            assert_eq!(sites.canopies.len() + procedural, pines.len());
+            let shelter = canopy::hangar_trees(&terrain, tile).len();
+            assert_eq!(sites.canopies.len() + procedural, pines.len() + shelter);
+            if tile.x == 4 || tile.x == -12 {
+                assert!(procedural > 0 && sites.canopies.is_empty(), "{tile}");
+                assert!(sites.undergrowth.is_empty(), "imported stand in {tile}");
+            }
             for tree in sites.canopies {
                 let pose = tree.pose;
-                species[tree.species as usize] = true;
+                imported += 1;
+                assert!(canopy::near_landmark(pose.translation.xz()));
                 let collider = tree.collider();
                 let trunk = collider.0[0];
                 let at = pose.transform_point(Vec3::new(trunk.x, 0.0, trunk.z));
@@ -599,7 +595,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(species, [true; Species::ALL.len()]);
+        assert!(imported > 4);
     }
 
     #[test]
@@ -631,7 +627,9 @@ mod tests {
     fn distant_colliders_unload_and_return_at_the_same_position() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
-            .init_resource::<PlantModels>()
+            .init_resource::<PlantMaterials>()
+            .init_resource::<Assets<Mesh>>()
+            .insert_resource(Terrain::new())
             .add_systems(Update, stream_scenery);
         let root = app.world_mut().spawn(Transform::IDENTITY).id();
         let player = app
@@ -651,7 +649,6 @@ mod tests {
                     solids: vec![boulder],
                     canopies: vec![],
                     undergrowth: vec![],
-                    plants: vec![],
                 },
             )]
             .into_iter()

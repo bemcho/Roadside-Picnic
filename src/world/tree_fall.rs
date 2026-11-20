@@ -219,16 +219,15 @@ mod tests {
 
     use super::*;
     use crate::world::canopy::{CanopyModels, ForestTree, Species, spawn_canopies};
-    use crate::world::plants::PlantModels;
+    use crate::world::plants::PlantMaterials;
     use crate::world::scenery;
 
     #[test]
     fn imported_and_batched_trees_fall_and_stay_gone_across_chunk_reload() {
-        let tile = IVec2::new(-2, -1);
+        let tile = IVec2::new(0, -2);
         let terrain = Terrain::new();
         let (mut sites, forest, _) = scenery::build_tile(&terrain, tile);
         sites.undergrowth.clear();
-        sites.plants.clear();
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
@@ -236,7 +235,7 @@ mod tests {
                 100,
             )))
             .insert_resource(terrain)
-            .init_resource::<PlantModels>()
+            .init_resource::<PlantMaterials>()
             .init_resource::<Assets<Mesh>>()
             .insert_resource(LandscapeMaterials {
                 terrain: Handle::default(),

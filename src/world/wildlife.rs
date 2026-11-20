@@ -1,7 +1,9 @@
 //! Sparse, decorative wildlife using shared skinned meshes.
 
 mod movement;
+mod mutants;
 mod rig;
+mod sound;
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -18,10 +20,12 @@ use super::terrain::{BASE, HALF_SIZE, Terrain};
 use super::{WorldRoot, detail_range};
 
 pub(super) use movement::move_wildlife;
+pub(super) use mutants::move_mutants;
 pub(super) use rig::pose_wildlife;
+pub(crate) use sound::{CreatureSound, Cue};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
+pub(crate) enum Kind {
     Frostwolf,
     Hexadeer,
     Skyglider,
@@ -31,10 +35,14 @@ enum Kind {
     Owl,
     Raven,
     Sparrow,
+    Bovine,
+    Chimera,
+    Fleshdeer,
+    Mutt,
 }
 
 impl Kind {
-    const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Frostwolf,
         Self::Hexadeer,
         Self::Skyglider,
@@ -44,7 +52,18 @@ impl Kind {
         Self::Owl,
         Self::Raven,
         Self::Sparrow,
+        Self::Bovine,
+        Self::Chimera,
+        Self::Fleshdeer,
+        Self::Mutt,
     ];
+
+    pub(crate) fn is_bird(self) -> bool {
+        matches!(
+            self,
+            Self::Skyglider | Self::Hawk | Self::Heron | Self::Owl | Self::Raven | Self::Sparrow
+        )
+    }
 
     fn model(self) -> (&'static str, f32, f32) {
         match self {
@@ -57,6 +76,10 @@ impl Kind {
             Self::Owl => (assets::OWL, 0.55, FRAC_PI_2),
             Self::Raven => (assets::RAVEN, 0.88, 0.0),
             Self::Sparrow => (assets::SPARROW, 0.38, FRAC_PI_2),
+            Self::Bovine => (assets::BOVINE, 3.25, FRAC_PI_2),
+            Self::Chimera => (assets::CHIMERA, 3.10, 0.96),
+            Self::Fleshdeer => (assets::FLESHDEER, 2.45, -0.34),
+            Self::Mutt => (assets::MUTT, 1.92, -0.94),
         }
     }
 }
@@ -136,6 +159,10 @@ pub(super) fn spawn_wildlife(
             }
             for (kind, route, flight) in flight_routes(&terrain) {
                 spawn_creature(wildlife, &models, &terrain, kind, route, Some(flight));
+            }
+            for (kind, route) in mutants::routes(&terrain) {
+                spawn_creature(wildlife, &models, &terrain, kind, route, None)
+                    .insert(mutants::Mutant::new(kind, route));
             }
         });
 }
@@ -315,17 +342,23 @@ fn flight_routes(terrain: &Terrain) -> Vec<(Kind, Route, Flight)> {
     routes
 }
 
-fn spawn_creature(
-    parent: &mut ChildSpawnerCommands,
+fn spawn_creature<'a>(
+    parent: &'a mut ChildSpawnerCommands,
     models: &WildlifeModels,
     terrain: &Terrain,
     kind: Kind,
     route: Route,
     flight: Option<Flight>,
-) {
+) -> EntityCommands<'a> {
     let motion = Wildlife::new(kind, route, flight);
     let pose = motion.initial_pose(terrain);
-    let distance = if flight.is_some() { 470.0 } else { 100.0 };
+    let distance = if flight.is_some() {
+        470.0
+    } else if mutants::is_mutant(kind) {
+        mutants::VIEW_DISTANCE
+    } else {
+        100.0
+    };
     let (model, paint) = &models.bodies[kind as usize];
     let mut entity = parent.spawn((pose, Visibility::default(), Name::new(kind.model().0)));
     let mut articulation = model.spawn(&mut entity, &motion, paint, distance);
@@ -334,6 +367,7 @@ fn spawn_creature(
         articulation.spawn_feathers(&mut entity, &models.wings, feathers);
     }
     entity.insert((motion, articulation));
+    entity
 }
 
 #[cfg(test)]

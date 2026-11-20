@@ -6,6 +6,7 @@ pub(crate) mod vehicle;
 
 use std::f32::consts::PI;
 
+use bevy::audio::SpatialListener;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::AtmosphereEnvironmentMapLight;
@@ -164,6 +165,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
     let focus = spawn + Vec3::Y * LOOK_HEIGHT;
     commands.spawn((
         PlayerCamera,
+        SpatialListener::new(0.85),
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             far: 2700.0,

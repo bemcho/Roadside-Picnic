@@ -8,6 +8,8 @@ use bevy::shader::ShaderRef;
 
 use crate::assets::{self, load_repeating};
 
+use super::roads::RoadNetwork;
+
 pub(super) type TerrainMaterial = ExtendedMaterial<StandardMaterial, GroundLayers>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -25,6 +27,10 @@ pub(super) struct GroundLayers {
     earth_normal: Handle<Image>,
     #[texture(106)]
     earth_surface: Handle<Image>,
+    #[texture(107)]
+    road_surface: Handle<Image>,
+    #[uniform(108)]
+    road_bounds: Vec4,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -37,8 +43,13 @@ impl MaterialExtension for GroundLayers {
     }
 }
 
-pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
+pub(super) fn load_terrain_material(
+    server: &AssetServer,
+    roads: &RoadNetwork,
+    images: &mut Assets<Image>,
+) -> TerrainMaterial {
     let load = |path, is_srgb| load_repeating(server, path, is_srgb);
+    let (road_surface, road_bounds) = roads.surface_texture();
     TerrainMaterial {
         base: StandardMaterial {
             perceptual_roughness: 1.0,
@@ -51,6 +62,8 @@ pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
             earth_albedo: load(assets::TERRAIN_EARTH_ALBEDO, true),
             earth_normal: load(assets::TERRAIN_EARTH_NORMAL, false),
             earth_surface: load(assets::TERRAIN_EARTH_SURFACE, false),
+            road_surface: images.add(road_surface),
+            road_bounds,
         },
     }
 }

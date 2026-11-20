@@ -11,12 +11,42 @@ use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
 use super::collision::{Collider, Pillar};
+use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
 use super::detail_range;
-use super::terrain::{BASE, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep};
+use super::hydrology::{LAKE, SWAMP};
+use super::terrain::{
+    BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
+};
 
 const SEED: u32 = 0xD4EA_9021;
 const SHADOW_ENTER: f32 = 48.0;
 const SHADOW_EXIT: f32 = 55.0;
+const LANDMARK_GROVES: [(Vec2, f32); 4] = [
+    (Vec2::new(QUARRY_CENTER.0, QUARRY_CENTER.1), 102.0),
+    (Vec2::new(BALD_CENTER.0, BALD_CENTER.1), 68.0),
+    (LAKE, 174.0),
+    (SWAMP, 136.0),
+];
+
+pub(super) fn near_landmark(at: Vec2) -> bool {
+    shelterbelt(at) > 0.0
+        || at.distance_squared(Vec2::from(BASE)) <= 107.0_f32.powi(2)
+        || LANDMARK_GROVES
+            .into_iter()
+            .any(|(center, radius)| at.distance_squared(center) <= radius * radius)
+}
+
+pub(super) fn landmark_grove(at: Vec2) -> f32 {
+    LANDMARK_GROVES
+        .into_iter()
+        .fold(0.0_f32, |amount, (center, radius)| {
+            amount.max(smoothstep(
+                1.0,
+                0.33,
+                at.distance_squared(center) / (radius * radius),
+            ))
+        })
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Species {
@@ -132,7 +162,7 @@ pub(super) struct ForestTree {
 impl ForestTree {
     pub(super) fn replace_pine(terrain: &Terrain, pine: Transform, seed: u32) -> Option<Self> {
         let roll = |n| lattice_hash(seed as i32, 0, SEED + n);
-        if roll(0) >= 0.34 {
+        if !near_landmark(pine.translation.xz()) || roll(0) >= 0.34 {
             return None;
         }
         let choice = roll(1);
@@ -200,29 +230,42 @@ impl ForestTree {
 }
 
 pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
-    [
-        (Species::Small, -14.7, 23.0, 6.4, 0.6),
-        (Species::Broadleaf, -27.0, 16.0, 16.0, 1.4),
-        (Species::Tall, 26.0, 17.0, 29.0, 2.0),
-        (Species::Birch, 24.0, -11.0, 13.0, 0.4),
-        (Species::Dead, -23.0, -18.0, 12.0, -0.8),
-    ]
-    .into_iter()
-    .filter_map(|(species, x, z, scale, yaw)| {
-        let at = Vec2::from(BASE) + Vec2::new(x, z);
-        if (at / TILE_SIZE).floor().as_ivec2() != tile {
-            return None;
+    const CELLS: i32 = 12;
+    let mid = (tile.as_vec2() + Vec2::splat(0.5)) * TILE_SIZE;
+    if (mid - Vec2::from(BASE)).abs().max_element() > 113.0 + TILE_SIZE * 0.5 {
+        return Vec::new();
+    }
+    let start = tile * CELLS;
+    let cell = TILE_SIZE / CELLS as f32;
+    let mut trees = Vec::new();
+    for z in start.y..start.y + CELLS {
+        for x in start.x..start.x + CELLS {
+            let roll = |n| lattice_hash(x, z, SEED + 431 + n);
+            let at = (Vec2::new(x as f32, z as f32)
+                + Vec2::new(lerp(0.24, 0.76, roll(0)), lerp(0.24, 0.76, roll(1))))
+                * cell;
+            if roll(2) >= shelterbelt(at) * 0.60
+                || near_wall_or_checkpoint(at, 2.6)
+                || terrain.normal_at(at.x, at.y).y < 0.88
+            {
+                continue;
+            }
+            let index = (roll(3) * Species::ALL.len() as f32) as usize;
+            let species = Species::ALL[index.min(Species::ALL.len() - 1)];
+            let spec = species.model();
+            let scale = lerp(spec.scale.0, spec.scale.1, roll(4))
+                * if inside_yard(at) { 0.84 } else { 1.0 };
+            trees.extend(ForestTree::grounded(
+                terrain,
+                species,
+                at,
+                Quat::from_rotation_y(roll(5) * TAU),
+                scale,
+                true,
+            ));
         }
-        ForestTree::grounded(
-            terrain,
-            species,
-            at,
-            Quat::from_rotation_y(yaw),
-            scale,
-            true,
-        )
-    })
-    .collect()
+    }
+    trees
 }
 
 #[derive(Component)]
@@ -343,22 +386,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_hangar_has_a_grounded_tree_of_each_species_outside_the_driveway() {
+    fn the_hangar_shelterbelt_adds_all_species_without_filling_the_yard() {
         let terrain = Terrain::new();
-        let trees: Vec<_> = [-2, -1]
-            .into_iter()
-            .flat_map(|z| hangar_trees(&terrain, IVec2::new(0, z)))
-            .collect();
+        let mut trees = Vec::new();
+        for z in -3..=0 {
+            for x in -2..=2 {
+                trees.extend(hangar_trees(&terrain, IVec2::new(x, z)));
+            }
+        }
+        assert!((45..=85).contains(&trees.len()), "{} trees", trees.len());
+        assert!(
+            trees
+                .iter()
+                .filter(|tree| tree.pose.translation.z - BASE.1 < -44.0)
+                .count()
+                > trees.len() / 2
+        );
         for species in Species::ALL {
-            let Some(tree) = trees.iter().find(|tree| tree.species == species) else {
-                panic!("missing {species:?} around the hangar");
-            };
+            assert!(trees.iter().filter(|tree| tree.species == species).count() >= 4);
+        }
+        for tree in trees {
             let at = tree.pose.translation;
             let offset = at.xz() - Vec2::from(BASE);
-            assert!(offset.length() < 36.0);
-            assert!(offset.x.abs() > 19.0 || offset.y > 21.0);
+            assert!(offset.x.abs() > 49.0 || offset.y < -44.0);
             assert!(at.y <= terrain.mesh_height_at(at.xz()));
             assert!(terrain.road_mask(at.x, at.z) <= 0.02);
+            assert!(!near_wall_or_checkpoint(at.xz(), 2.6));
         }
     }
 
