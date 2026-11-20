@@ -28,7 +28,7 @@ pub(crate) struct Vehicle {
 }
 
 #[derive(Component)]
-pub(crate) struct Driving(pub(super) Entity);
+pub(crate) struct Driving(pub(crate) Entity);
 
 pub(super) type Driver<'w, 's> = Query<
     'w,
@@ -55,6 +55,10 @@ pub(crate) fn parked_vehicle(floor: Vec3) -> Transform {
 }
 
 impl Vehicle {
+    pub(crate) fn speed(&self) -> f32 {
+        self.speed
+    }
+
     pub(super) fn park(&mut self) {
         self.speed = 0.0;
         self.steer = 0.0;

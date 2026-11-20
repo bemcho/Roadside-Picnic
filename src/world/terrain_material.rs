@@ -1,4 +1,4 @@
-//! Scanned ground layers, blended in world space by the terrain shader.
+//! Tiling ground layers, blended in world space by the terrain shader.
 
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -18,13 +18,13 @@ pub(super) struct GroundLayers {
     #[texture(102)]
     grass_normal: Handle<Image>,
     #[texture(103)]
-    grass_arm: Handle<Image>,
+    grass_surface: Handle<Image>,
     #[texture(104)]
     earth_albedo: Handle<Image>,
     #[texture(105)]
     earth_normal: Handle<Image>,
     #[texture(106)]
-    earth_arm: Handle<Image>,
+    earth_surface: Handle<Image>,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -67,10 +67,10 @@ pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
         extension: GroundLayers {
             grass_albedo: load(assets::TERRAIN_GRASS_ALBEDO, true),
             grass_normal: load(assets::TERRAIN_GRASS_NORMAL, false),
-            grass_arm: load(assets::TERRAIN_GRASS_ARM, false),
+            grass_surface: load(assets::TERRAIN_GRASS_SURFACE, false),
             earth_albedo: load(assets::TERRAIN_EARTH_ALBEDO, true),
             earth_normal: load(assets::TERRAIN_EARTH_NORMAL, false),
-            earth_arm: load(assets::TERRAIN_EARTH_ARM, false),
+            earth_surface: load(assets::TERRAIN_EARTH_SURFACE, false),
         },
     }
 }

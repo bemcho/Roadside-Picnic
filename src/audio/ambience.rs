@@ -12,29 +12,24 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume};
-use bevy::prelude::*;
-
-/// Sample rate of the synthesized buffer.
-const SAMPLE_RATE: u32 = 22_050;
+use super::{SAMPLE_RATE, encode_wav};
 
 /// Loop length in seconds.
 const DURATION_SECS: u32 = 150;
 
-/// Target loudness of the mix (RMS, about -18 dBFS): clearly audible at
-/// ordinary system volumes while leaving headroom for the soft clipper.
-const TARGET_RMS: f32 = 0.125;
+/// Leave space for effects while keeping the ambience audible.
+const TARGET_RMS: f32 = 0.19;
 
 /// Deterministic PRNG so the ambience is reproducible.
-struct XorShift64(u64);
+pub(super) struct XorShift64(u64);
 
 impl XorShift64 {
-    fn new(seed: u64) -> Self {
+    pub(super) fn new(seed: u64) -> Self {
         Self(seed.max(1))
     }
 
     /// Uniform in `[0, 1)`.
-    fn next_f32(&mut self) -> f32 {
+    pub(super) fn next_f32(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -69,27 +64,10 @@ pub fn synth_ambience_wav() -> Arc<[u8]> {
     // Normalize, soft clip, and encode to 16-bit PCM.
     let rms = (mix.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
     let gain = if rms > 0.0 { TARGET_RMS / rms } else { 1.0 };
-    let mut wav = Vec::with_capacity(44 + n * 2);
-    write_wav_header(&mut wav, n as u32);
-    for sample in &mix {
-        let y = (*sample * gain).tanh() * 0.95;
-        wav.extend_from_slice(&((y * i16::MAX as f32) as i16).to_le_bytes());
-    }
-    Arc::from(wav)
-}
-
-/// Spawns the looping ambience player. Parent it to the world root so it
-/// dies together with the Zone.
-pub fn spawn_ambience(commands: &mut Commands, sources: &mut Assets<AudioSource>) -> Entity {
-    let source = sources.add(AudioSource {
-        bytes: synth_ambience_wav(),
-    });
-    commands
-        .spawn((
-            AudioPlayer(source),
-            PlaybackSettings::LOOP.with_volume(Volume::Linear(0.8)),
-        ))
-        .id()
+    encode_wav(
+        mix.len(),
+        mix.into_iter().map(|sample| (sample * gain).tanh() * 0.95),
+    )
 }
 
 /// Wind: white noise through a one-pole low-pass, shaped by slow gust LFOs.
@@ -97,6 +75,7 @@ fn add_wind(mix: &mut [f32], rng: &mut XorShift64) {
     let lp_alpha = 0.095; // ~350 Hz cutoff at 22050 Hz
     let mut lp = 0.0f32;
     let mut brown = 0.0f32;
+    let mut air = 0.0f32;
 
     for (i, sample) in mix.iter_mut().enumerate() {
         let t = i as f32 / SAMPLE_RATE as f32;
@@ -109,10 +88,11 @@ fn add_wind(mix: &mut [f32], rng: &mut XorShift64) {
 
         let white = rng.next_f32() * 2.0 - 1.0;
         lp += lp_alpha * (white - lp);
+        air += 0.38 * (white - air);
         brown = 0.992 * brown + 0.008 * white * 3.0;
 
         // Rushing air + a deeper body of moving air.
-        *sample += (lp * 0.55 + brown * 0.45) * gust * 0.20;
+        *sample += (lp * 0.50 + brown * 0.2 + (air - lp) * 0.30) * gust * 0.23;
     }
 }
 
@@ -121,8 +101,9 @@ fn add_drone(mix: &mut [f32]) {
     for (i, sample) in mix.iter_mut().enumerate() {
         let t = i as f32 / SAMPLE_RATE as f32;
         let body = 0.5 * (TAU * 41.0 * t).sin() + 0.5 * (TAU * 44.7 * t + 0.5).sin();
+        let harmonics = 0.42 * (TAU * 123.0 * t).sin() + 0.2 * (TAU * 178.8 * t).sin();
         let tremolo = 0.75 + 0.25 * (TAU * 0.07 * t).sin();
-        *sample += body * tremolo * 0.045;
+        *sample += (body * 0.45 + harmonics) * tremolo * 0.055;
     }
 }
 
@@ -234,32 +215,13 @@ fn add_pings(mix: &mut [f32], rng: &mut XorShift64) {
     }
 }
 
-/// Writes a standard 44-byte RIFF/WAVE header for mono 16-bit PCM.
-fn write_wav_header(out: &mut Vec<u8>, data_len: u32) {
-    let byte_rate = SAMPLE_RATE * 2;
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len * 2).to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    out.extend_from_slice(&byte_rate.to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes()); // block align
-    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&(data_len * 2).to_le_bytes());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn wav_header_is_well_formed() {
-        let mut wav = Vec::new();
-        write_wav_header(&mut wav, 1000);
+        let wav = encode_wav(1000, [0.0; 1000]);
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(&wav[12..16], b"fmt ");
@@ -289,7 +251,6 @@ mod tests {
             .map(|&c| i16::from_le_bytes(c) as f32 / i16::MAX as f32)
             .collect();
         let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-        // Between -24 and -14 dBFS: audible without clipping into distortion.
-        assert!((0.063..0.2).contains(&rms), "ambience RMS {rms}");
+        assert!((0.15..0.21).contains(&rms), "ambience RMS {rms}");
     }
 }

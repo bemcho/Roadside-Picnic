@@ -1,5 +1,5 @@
 //! The stalkers' base: an old industrial hangar on a levelled pad at the
-//! south edge of the Zone. A concrete hall of corrugated walls, steel
+//! south edge of the Zone. A concrete hall of weathered panels, steel
 //! columns, roof trusses and an overhead crane shelters a yard of catwalks,
 //! crates and machinery. Runs start inside, by the door that opens north
 //! into the Zone, and the Zone sends dead stalkers back here.
@@ -7,11 +7,8 @@
 use std::f32::consts::FRAC_PI_2;
 use std::sync::LazyLock;
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::assets;
 use crate::player::vehicle::{parked_vehicle, spawn_vehicle};
@@ -71,7 +68,7 @@ static WALLS: LazyLock<Vec<Pillar>> = LazyLock::new(|| {
 /// The hall's surfaces.
 struct Paints {
     concrete: Handle<StandardMaterial>,
-    corrugated: Handle<StandardMaterial>,
+    panels: Handle<StandardMaterial>,
     steel: Handle<StandardMaterial>,
     yellow: Handle<StandardMaterial>,
     hazard: Handle<StandardMaterial>,
@@ -81,12 +78,8 @@ struct Paints {
 }
 
 impl Paints {
-    fn new(
-        server: &AssetServer,
-        materials: &mut Assets<StandardMaterial>,
-        images: &mut Assets<Image>,
-    ) -> Self {
-        let scanned = |albedo, normal, arm, tint: Color, roughness, metallic| {
+    fn new(server: &AssetServer, materials: &mut Assets<StandardMaterial>) -> Self {
+        let surface = |albedo, normal, arm, tint: Color, roughness, metallic| {
             let arm = load_repeating(server, arm, false);
             StandardMaterial {
                 base_color: tint,
@@ -99,11 +92,15 @@ impl Paints {
                 ..default()
             }
         };
-        let painted = |color: Color, roughness, metallic| StandardMaterial {
-            base_color: color,
-            perceptual_roughness: roughness,
-            metallic,
-            ..default()
+        let trim = |albedo, roughness, metallic| {
+            surface(
+                albedo,
+                assets::BASE_STEEL_NORMAL,
+                assets::BASE_STEEL_ARM,
+                Color::WHITE,
+                roughness,
+                metallic,
+            )
         };
         let glowing = |nits: f32| StandardMaterial {
             base_color: Color::WHITE,
@@ -111,32 +108,26 @@ impl Paints {
             ..default()
         };
         Self {
-            // Polished, worn slab: the scan's roughness, a little smoother.
-            concrete: materials.add(scanned(
+            concrete: materials.add(surface(
                 assets::BASE_CONCRETE_ALBEDO,
                 assets::BASE_CONCRETE_NORMAL,
                 assets::BASE_CONCRETE_ARM,
-                Color::srgb(0.85, 0.85, 0.82),
-                0.7,
-                0.0,
+                Color::srgb(1.12, 1.10, 1.06),
+                0.86,
+                0.12,
             )),
-            // Pale blue-grey painted sheeting.
-            corrugated: materials.add(scanned(
-                assets::BASE_CORRUGATED_ALBEDO,
-                assets::BASE_CORRUGATED_NORMAL,
-                assets::BASE_CORRUGATED_ARM,
-                Color::srgb(1.6, 1.75, 1.9),
-                0.8,
-                0.15,
+            panels: materials.add(surface(
+                assets::BASE_WALL_ALBEDO,
+                assets::BASE_WALL_NORMAL,
+                assets::BASE_WALL_ARM,
+                Color::srgb(1.5, 1.5, 1.55),
+                0.92,
+                0.27,
             )),
-            steel: materials.add(painted(Color::srgb(0.16, 0.17, 0.18), 0.5, 0.8)),
-            yellow: materials.add(painted(Color::srgb(0.9, 0.62, 0.04), 0.55, 0.1)),
-            hazard: materials.add(StandardMaterial {
-                base_color_texture: Some(images.add(hazard_stripes())),
-                perceptual_roughness: 0.6,
-                ..default()
-            }),
-            grate: materials.add(painted(Color::srgb(0.04, 0.04, 0.04), 0.4, 0.9)),
+            steel: materials.add(trim(assets::BASE_STEEL_ALBEDO, 0.9, 0.7)),
+            yellow: materials.add(trim(assets::BASE_YELLOW_ALBEDO, 0.95, 0.08)),
+            hazard: materials.add(trim(assets::BASE_HAZARD_ALBEDO, 0.96, 0.1)),
+            grate: materials.add(trim(assets::BASE_GRATE_ALBEDO, 0.82, 0.72)),
             skylight: materials.add(glowing(6_000.0)),
             bulb: materials.add(glowing(60_000.0)),
         }
@@ -176,7 +167,6 @@ pub(super) fn spawn_base(
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
 ) {
     let floor = terrain.height_at(BASE.0, BASE.1) + FLOOR_LIFT;
     let hall = commands
@@ -201,7 +191,7 @@ pub(super) fn spawn_base(
     );
     commands.entity(vehicle).insert(WorldRoot);
 
-    let paints = Paints::new(&asset_server, &mut materials, &mut images);
+    let paints = Paints::new(&asset_server, &mut materials);
     let mut builder = Builder {
         commands: &mut commands,
         meshes: &mut meshes,
@@ -230,7 +220,7 @@ fn spawn_shell(b: &mut Builder, paints: &Paints) {
     // Walls reach a meter below the floor, so no gap shows at the pad's edge.
     let tall = HEIGHT + 1.0;
     let mid = (HEIGHT - 1.0) / 2.0;
-    let sheet = &paints.corrugated;
+    let sheet = &paints.panels;
     for side in [-1.0, 1.0] {
         b.block(
             Vec3::new(WALL_THICKNESS, tall, 2.0 * d),
@@ -505,38 +495,6 @@ fn tiled_box(size: Vec3, tile: f32) -> Mesh {
     mesh
 }
 
-/// Diagonal yellow and black warning stripes, tiling.
-fn hazard_stripes() -> Image {
-    const SIZE: u32 = 64;
-    let data = (0..SIZE * SIZE)
-        .flat_map(|i| {
-            let (x, y) = (i % SIZE, i / SIZE);
-            if (x + y) % SIZE < SIZE / 2 {
-                [235, 170, 10, 255]
-            } else {
-                [18, 18, 18, 255]
-            }
-        })
-        .collect();
-    let mut image = Image::new(
-        Extent3d {
-            width: SIZE,
-            height: SIZE,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::linear()
-    });
-    image
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +523,22 @@ mod tests {
         ] {
             assert_eq!(push(door), door, "door blocked at {door}");
         }
+    }
+
+    #[test]
+    fn catwalk_feet_block_even_a_crawling_stalker() {
+        let body = Body {
+            radius: 0.35,
+            height: 0.5,
+        };
+        let yard = Collider(YARD);
+        let transform = GlobalTransform::from_scale(Vec3::splat(YARD_SCALE));
+        let push = |point| push_out(point, 0.0, body, [(&yard, &transform)]);
+        for foot in [Vec2::new(-0.28, 0.47), Vec2::new(0.43, -0.15)] {
+            let point = foot * YARD_SCALE;
+            assert_ne!(push(point), point, "could crawl under a post at {point}");
+        }
+        assert_eq!(push(Vec2::ZERO), Vec2::ZERO);
     }
 
     #[test]

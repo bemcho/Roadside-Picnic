@@ -5,6 +5,7 @@ import sys
 
 import bmesh
 import bpy
+import numpy as np
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("source")
@@ -64,6 +65,15 @@ MATERIALS = {
     "slime_ditch": ("Slime and puddles", 0.16),
 }
 MAP_TYPES = ("albedo", "normal", "roughness")
+DETAILS = {
+    # Close-up crop, color contribution, microrelief, minimum roughness.
+    "petrified": ((2, (28, 414, 106, 572)), 0.62, 1.5, 0.29),
+    "dead_forest": ((0, (868, 378, 909, 568)), 0.52, 1.7, 0.55),
+    "overgrowth": ((3, (901, 65, 1007, 194)), 0.48, 1.2, 0.43),
+    "mud_bog": ((2, (446, 411, 523, 588)), 0.55, 1.85, 0.26),
+    "slime_ditch": ((1, (806, 751, 994, 948)), 0.6, 1.4, 0.22),
+}
+SIZE = 512
 
 
 def save_map(image, path):
@@ -75,23 +85,64 @@ def save_map(image, path):
 
 def crop_texture_maps():
     boards = [bpy.data.images.load(path) for path in args.boards]
-    board_pixels = [list(image.pixels) for image in boards]
+    board_pixels = []
+    for image in boards:
+        width, height = image.size
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        board_pixels.append(pixels.reshape(height, width, 4))
+
+    def crop(spec):
+        board_index, box = spec
+        source_width, source_height = boards[board_index].size
+        left, top, right, bottom = (
+            round(value * (source_width if axis % 2 == 0 else source_height) / 1024)
+            for axis, value in enumerate(box)
+        )
+        return board_pixels[board_index][source_height - bottom : source_height - top, left:right]
+
+    def tile(pixels):
+        # Mix in the middle of a half-tile offset near each boundary.
+        index = np.arange(SIZE)
+        weight = np.minimum(index, SIZE - index) / (SIZE * 0.15)
+        weight = np.clip(weight, 0.0, 1.0)
+        weight = weight * weight * (3.0 - 2.0 * weight)
+        for axis, blend in ((0, weight[:, None, None]), (1, weight[None, :, None])):
+            pixels = pixels * blend + np.roll(pixels, SIZE // 2, axis=axis) * (1.0 - blend)
+        return pixels
+
+    def resample(pixels):
+        height, width, _ = pixels.shape
+        x, y = np.linspace(0, width - 1, SIZE), np.linspace(0, height - 1, SIZE)
+        ix, iy = x.astype(int), y.astype(int)
+        dx, dy = (x - ix)[None, :, None], (y - iy)[:, None, None]
+        right, above = np.minimum(ix + 1, width - 1), np.minimum(iy + 1, height - 1)
+        a = pixels[iy[:, None], ix] * (1 - dx) + pixels[iy[:, None], right] * dx
+        b = pixels[above[:, None], ix] * (1 - dx) + pixels[above[:, None], right] * dx
+        return tile(a * (1 - dy) + b * dy)[:, :, :3]
+
     for asset_name, crops in TEXTURE_CROPS.items():
-        for map_type, (board_index, box) in zip(MAP_TYPES, crops):
-            source_width, source_height = boards[board_index].size
-            left, top, right, bottom = (
-                round(value * (source_width if axis % 2 == 0 else source_height) / 1024)
-                for axis, value in enumerate(box)
-            )
-            width, height = right - left, bottom - top
-            pixels = []
-            for y in range(source_height - bottom, source_height - top):
-                offset = (y * source_width + left) * 4
-                pixels.extend(board_pixels[board_index][offset : offset + width * 4])
+        detail_crop, amount, relief, rough_floor = DETAILS[asset_name]
+        albedo, normal, roughness = [resample(crop(spec)) for spec in crops]
+        detail = resample(crop(detail_crop))
+        value = detail @ np.array((0.2126, 0.7152, 0.0722))
+        softened = sum(np.roll(value, shift, axis) for axis in (0, 1) for shift in (-5, 5)) / 4
+        highpass = value - softened
+        albedo = np.clip(albedo * (1 - amount) + detail * amount + highpass[..., None] * 0.24, 0, 1)
+        normal = normal * 2.0 - 1.0
+        normal[:, :, 0] += (np.roll(value, 1, 1) - np.roll(value, -1, 1)) * relief
+        normal[:, :, 1] += (np.roll(value, 1, 0) - np.roll(value, -1, 0)) * relief
+        normal[:, :, 2] = np.maximum(normal[:, :, 2], 0.38)
+        normal /= np.linalg.norm(normal, axis=-1, keepdims=True)
+        normal = normal * 0.5 + 0.5
+        roughness = np.clip(rough_floor + (0.95 - rough_floor) * roughness - (value[..., None] - 0.3) * 0.2, 0.19, 0.96)
+        for map_type, pixels in zip(MAP_TYPES, (albedo, normal, roughness)):
             image = bpy.data.images.new(
-                f"{asset_name}_{map_type}", width=width, height=height
+                f"{asset_name}_{map_type}", width=SIZE, height=SIZE
             )
-            image.pixels = pixels
+            rgba = np.ones((SIZE, SIZE, 4), dtype=np.float32)
+            rgba[:, :, :3] = pixels
+            image.pixels.foreach_set(rgba.ravel())
             save_map(image, os.path.join(TEXTURE_DIR, f"{asset_name}_{map_type}.png"))
             bpy.data.images.remove(image)
     for board in boards:
@@ -117,7 +168,7 @@ def textured_material(asset_name):
         texture.image = image
         if map_type == "normal":
             normal_map = material.node_tree.nodes.new("ShaderNodeNormalMap")
-            normal_map.inputs["Strength"].default_value = 0.6
+            normal_map.inputs["Strength"].default_value = 0.85
             material.node_tree.links.new(texture.outputs["Color"], normal_map.inputs["Color"])
             material.node_tree.links.new(normal_map.outputs["Normal"], principled.inputs["Normal"])
         else:
@@ -254,6 +305,8 @@ for index, (filename, material_names) in enumerate(MODELS):
     bmesh.ops.recalc_face_normals(bmesh_data, faces=bmesh_data.faces)
     bmesh_data.to_mesh(data)
     bmesh_data.free()
+    for polygon in data.polygons:
+        polygon.use_smooth = True
 
     obj = bpy.data.objects.new(filename, data)
     bpy.context.collection.objects.link(obj)
@@ -269,5 +322,6 @@ for index, (filename, material_names) in enumerate(MODELS):
         export_image_format="AUTO",
         use_selection=True,
         export_apply=True,
+        export_tangents=True,
     )
     bpy.data.objects.remove(obj, do_unlink=True)

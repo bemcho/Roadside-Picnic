@@ -7,6 +7,7 @@ pub mod text;
 
 use bevy::prelude::*;
 
+use crate::audio::AudioMode;
 use crate::player::{
     Locomotion, Player,
     vehicle::{Driving, Vehicle, can_enter_vehicle},
@@ -149,6 +150,7 @@ fn update_hud_stats(run: Res<ZoneRun>, mut stats: Query<&mut Text, With<HudStats
 
 fn update_vehicle_prompt(
     phase: Res<State<InGamePhase>>,
+    audio: Res<AudioMode>,
     player: Query<(&Transform, &Locomotion, Option<&Driving>), With<Player>>,
     vehicles: Query<&Transform, With<Vehicle>>,
     mut prompts: Query<&mut Text, (With<VehiclePrompt>, Without<HudControls>)>,
@@ -172,10 +174,11 @@ fn update_vehicle_prompt(
     } else {
         ""
     };
-    let controls_hint = if driving {
-        text::HUD_DRIVER_CONTROLS
-    } else {
-        text::HUD_CONTROLS_HINT
+    let controls_hint = match (driving, *audio == AudioMode::Muted) {
+        (false, false) => text::HUD_CONTROLS_HINT,
+        (false, true) => text::HUD_CONTROLS_MUTED,
+        (true, false) => text::HUD_DRIVER_CONTROLS,
+        (true, true) => text::HUD_DRIVER_MUTED,
     };
     if prompt.0 != hint {
         prompt.0 = hint.to_owned();

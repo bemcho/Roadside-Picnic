@@ -19,6 +19,7 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 - **E** — enter or exit the armored vehicle; **W/S** to accelerate/reverse, **A/D** to steer, **Space** to brake
 - **Right mouse drag** — orbit the camera; **mouse wheel** — zoom
 - **Esc** — pause / resume
+- **M** — mute / unmute game audio
 - **Q** — quit
 
 ## Procedural content
@@ -27,15 +28,19 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   no external crates): rolling overgrown hills, a quarry with a raised lip, a scorched
   bald hill, a marshy lowland, and a dirt road to the quarry rim. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
-  in other plugins.
+  in other plugins. `tools/prepare_terrain_textures.py` extracts tiling albedo,
+  normal, and packed AO/roughness/height maps from `terrain_texture_image_2.webp`
+  (moss) and `terrain_texture_1.webp` (bare ground). The shader blends irregular
+  patches over the terrain masks and uses the heights for shallow parallax.
 - **Fauna** (`src/world/trees.rs`): four extracted, textured models
   (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, flat-ish, sparse
   on the bald hill). Rebuild them from the packed source with
   `tools/prepare_fauna_asset.py <source.glb> assets/models/fauna assets/textures/fauna`
   (run in headless Blender after `--`). It reuses the saved albedo, normal and
-  roughness PNGs; `--boards <image_3> <image_2> <image_1> <image_0>` recrops them
-  from the supplied reference sheets, without their labels. The forest uses
+  roughness PNGs; `--boards <image_3> <image_2> <image_1> <image_0>` rebuilds
+  512 px maps by combining swatches and close-ups from the reference sheets.
+  The forest uses
   separate birch/petrified bark, and plants share the mud material at their bases.
   Texture cards, material balls and miniature LOD previews are excluded, and
   each extracted cluster is centered with its lowest point at ground level.
@@ -45,7 +50,10 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   (`assets/models/base/warehouse.glb`, Tripo, decimated like the trees) on a levelled
   pad at `terrain::BASE` on the south edge. Runs start at `SPAWN` inside it, and a
   `Respawn` message (sent when the stalker touches an anomaly) brings them back there.
-  Its pillars come from `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
+  Seat the imported catwalk feet and floor props with `tools/ground_warehouse.py`
+  before regenerating its pillars with `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
+  `tools/prepare_hangar_textures.py` derives the slab, panels, steel, and trim
+  textures from the four supplied hangar reference boards.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots. `tools/prepare_vehicle_asset.py` rebuilds the GLB with
   UVs and embedded material maps from four reference sheets. Regenerate
@@ -54,8 +62,9 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
   of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed
   under (crawling body is 0.5 m). Give every new solid model a `Collider`.
-- **Ambience** (`src/world/ambience.rs`) is synthesized at startup into a single looping
-  WAV (wind, drone, birds, distant moans/pings) — no audio files in the repo.
+- **Audio** (`src/audio/`) is synthesized at startup: looping Zone ambience,
+  gait-dependent footsteps, jump and landing, vehicle doors, and a speed-driven
+  engine. Playback follows the system's default audio output.
 - **Stalker model** (`assets/models/stalker.glb`) is a Tripo mesh auto-rigged in headless
   Blender by `tools/rig_stalker.py`, which also bakes the Crawl/Idle/Jump/Run/Walk clips
   (glTF animation indices 0–4, sorted by name). `src/player/animation.rs` cross-fades

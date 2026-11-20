@@ -17,8 +17,9 @@ use crate::assets::MODELS;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{Body, Collider, SPAWN, TERRAIN_HALF_SIZE, Terrain, push_out};
 
+pub(crate) use animation::Gait;
 use animation::{
-    Gait, StalkerModel, animate_stalker, attach_stalker_animator, load_stalker_animations,
+    StalkerModel, animate_stalker, attach_stalker_animator, load_stalker_animations,
     pause_stalker_animation, pose_stalker_body, resume_stalker_animation,
 };
 use camera::{LOOK_HEIGHT, OrbitCamera, follow_player, grab_cursor_while_orbiting, orbit_camera};

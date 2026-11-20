@@ -3,6 +3,7 @@
 //! See `CLAUDE.md` for architecture conventions.
 
 mod assets;
+mod audio;
 mod player;
 mod states;
 mod ui;
@@ -22,7 +23,13 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .init_state::<AppState>()
         .add_sub_state::<InGamePhase>()
-        .add_plugins((WorldPlugin, PlayerPlugin, ZonePlugin, UiPlugin))
+        .add_plugins((
+            audio::GameAudioPlugin,
+            WorldPlugin,
+            PlayerPlugin,
+            ZonePlugin,
+            UiPlugin,
+        ))
         .add_systems(Update, advance_loading.run_if(in_state(AppState::Loading)))
         .add_systems(Update, toggle_pause.run_if(in_state(AppState::InGame)))
         .add_systems(Update, quit_on_q)

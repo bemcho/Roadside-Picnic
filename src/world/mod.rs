@@ -1,6 +1,5 @@
 //! World environment: terrain, lighting, atmosphere, ambience.
 
-mod ambience;
 mod base;
 mod collision;
 mod terrain;
@@ -67,16 +66,11 @@ fn spawn_world(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
-    mut sources: ResMut<Assets<AudioSource>>,
     mut mediums: ResMut<Assets<ScatteringMedium>>,
 ) {
     let root = commands
         .spawn((WorldRoot, Transform::default(), Visibility::default()))
         .id();
-
-    // Ambient audio loop, parented to the world root so it dies with it.
-    let ambience_entity = ambience::spawn_ambience(&mut commands, &mut sources);
-    commands.entity(root).add_child(ambience_entity);
 
     // Earth-like sky, thickened so the Zone sits in a dusty haze.
     let medium = mediums.add(ScatteringMedium::earth(256, 256).with_density_multiplier(HAZE));
