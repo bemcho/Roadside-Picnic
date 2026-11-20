@@ -9,6 +9,8 @@ pub(super) const LAKE: Vec2 = Vec2::new(-365.0, 327.0);
 pub(super) const SWAMP: Vec2 = Vec2::new(-165.0, 238.0);
 const WEST_BASIN: Vec2 = Vec2::new(-2020.0, 333.0);
 pub(super) const FORD_X: f32 = 35.0;
+pub(super) const WEST_FORD_X: f32 = -615.0;
+pub(super) const EAST_FORD_X: f32 = 1110.0;
 
 pub(super) struct Wetlands {
     river: f32,
@@ -83,8 +85,14 @@ impl Wetlands {
         for (d, falloff, depth) in [
             (
                 self.river,
-                4.35,
-                lerp(4.3, 0.32, ford(x, FORD_X, 14.0).max(ford(x, -615.0, 12.0))),
+                4.35 + ford(x, WEST_FORD_X, 12.0),
+                lerp(
+                    4.3,
+                    0.32,
+                    ford(x, FORD_X, 14.0)
+                        .max(ford(x, WEST_FORD_X, 12.0))
+                        .max(ford(x, EAST_FORD_X, 14.0)),
+                ),
             ),
             (self.tributary, 4.75, lerp(3.1, 0.36, ford(z, 563.0, 11.0))),
             (self.lake, 1.65, 12.0),

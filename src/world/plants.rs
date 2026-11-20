@@ -143,7 +143,9 @@ fn expand_patches<'a>(
                 let clear = if in_belt {
                     shelterbelt(at) > 0.0 && !near_wall_or_checkpoint(at, 0.7)
                 } else {
-                    !reserve_scenery(at, 1.6) && terrain.base_mask(at.x, at.y) <= 0.05
+                    !reserve_scenery(at, 1.6)
+                        && !super::sites::clear_footprint(at, 1.0)
+                        && terrain.base_mask(at.x, at.y) <= 0.05
                 };
                 (clear
                     && at.abs().max_element() < HALF_SIZE - 3.0
@@ -171,6 +173,7 @@ fn grow_plant_layer(terrain: &Terrain, tile: IVec2, layer: u32, sites: &mut Vec<
             let at = (Vec2::new(x as f32, z as f32) + Vec2::new(roll(0), roll(1))) * CELL;
             if at.abs().max_element() > HALF_SIZE - 3.0
                 || reserve_scenery(at, 1.6)
+                || super::sites::clear_footprint(at, 1.0)
                 || terrain.base_mask(at.x, at.y) > 0.05
                 || terrain.road_mask(at.x, at.y) > 0.025
             {

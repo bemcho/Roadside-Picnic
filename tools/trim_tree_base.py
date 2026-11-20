@@ -15,10 +15,12 @@ The pillars file is a Rust array of `Pillar`s (glTF axes, model units): the
 stand's surface sampled into vertical columns on a PILLAR_CELL grid, each
 spanning the lowest to highest geometry in its column. src/world/trees.rs
 includes it for collision and for grounding the stand.
+Pass --split-columns after the output path to preserve gaps under roofs.
 """
 import bpy, bmesh, math, sys
 
 SRC, DST, CUT, PILLARS = sys.argv[sys.argv.index('--') + 1:][:4]
+SPLIT_COLUMNS = "--split-columns" in sys.argv[sys.argv.index('--') + 5:]
 CUT = float(CUT)
 PILLAR_CELL = 0.03
 # Columns whose geometry never rises above this (model units) are only litter.
@@ -75,6 +77,7 @@ for v in bm.verts:
 
 # Collision pillars: sample every triangle densely, bin samples into columns.
 columns = {}
+samples = {}
 bm.faces.ensure_lookup_table()
 for face in bm.faces:
     corners = [v.co for v in face.verts]
@@ -86,8 +89,31 @@ for face in bm.faces:
                 key = (round(p.x / PILLAR_CELL), round(p.y / PILLAR_CELL))
                 lo, hi, n = columns.get(key, (p.z, p.z, 0))
                 columns[key] = (min(lo, p.z), max(hi, p.z), n + 1)
-pillars = [(kx * PILLAR_CELL, -ky * PILLAR_CELL, lo, hi)  # Blender (x, y) is glTF (x, -z).
-           for (kx, ky), (lo, hi, n) in sorted(columns.items()) if n >= 3 and hi >= MIN_TOP]
+                if SPLIT_COLUMNS:
+                    samples.setdefault(key, []).append(p.z)
+
+
+def intervals(key, lo, hi):
+    if not SPLIT_COLUMNS:
+        yield lo, hi
+        return
+    heights = sorted(samples[key])
+    start = end = heights[0]
+    for height in heights[1:]:
+        if height - end > 2 * PILLAR_CELL:
+            yield start, end
+            start = height
+        end = height
+    yield start, end
+
+
+pillars = [
+    (kx * PILLAR_CELL, -ky * PILLAR_CELL, start, end)  # Blender (x, y) is glTF (x, -z).
+    for (kx, ky), (lo, hi, n) in sorted(columns.items())
+    if n >= 3
+    for start, end in intervals((kx, ky), lo, hi)
+    if end >= MIN_TOP
+]
 
 bm.to_mesh(mesh.data)
 bm.free()

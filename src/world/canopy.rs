@@ -34,12 +34,13 @@ pub(super) fn near_landmark(at: Vec2) -> bool {
         || LANDMARK_GROVES
             .into_iter()
             .any(|(center, radius)| at.distance_squared(center) <= radius * radius)
+        || super::sites::grove(at) > 0.0
 }
 
 pub(super) fn landmark_grove(at: Vec2) -> f32 {
     LANDMARK_GROVES
         .into_iter()
-        .fold(0.0_f32, |amount, (center, radius)| {
+        .fold(super::sites::grove(at), |amount, (center, radius)| {
             amount.max(smoothstep(
                 1.0,
                 0.33,

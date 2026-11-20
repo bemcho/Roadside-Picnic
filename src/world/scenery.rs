@@ -15,6 +15,7 @@ use super::collision::{Collider, Pillar};
 use super::cordon::{reserve_scenery, shelterbelt};
 use super::hydrology::Wetlands;
 use super::plants::{self, PlantMaterials};
+use super::sites;
 use super::terrain::{TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise};
 use super::trees::{self, TreeSite};
 
@@ -151,6 +152,7 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
                 * cell;
             let chance = roll(2);
             if reserve_scenery(p, 5.0)
+                || sites::clear_footprint(p, 4.0)
                 || terrain.road_mask(p.x, p.y) > 0.02
                 || terrain.base_mask(p.x, p.y) > 0.05
                 || (kind == Kind::Pine && shelterbelt(p) > 0.0)
@@ -289,6 +291,7 @@ pub(super) fn stream_scenery(
                         objects.spawn((tree.pose, tree.collider(), StandingTree::Imported(*tree)));
                     }
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
+                    super::sites::spawn_solids(objects, &terrain, tile);
                     plants::spawn_plants(objects, &terrain, tile, &plants, &mut meshes);
                 })
                 .id();
@@ -443,7 +446,10 @@ fn grow_reeds(terrain: &Terrain, tile: IVec2, batch: &mut Batch) {
             }
             let root = Vec2::new(x as f32 + roll(1), z as f32 + roll(2)) * CELL;
             let wet = Wetlands::at(root.x, root.y);
-            if wet.wetness() < 0.35 || terrain.road_mask(root.x, root.y) > 0.05 {
+            if wet.wetness() < 0.35
+                || terrain.road_mask(root.x, root.y) > 0.05
+                || sites::clear_footprint(root, 1.0)
+            {
                 continue;
             }
             let y = terrain.height_at(root.x, root.y);

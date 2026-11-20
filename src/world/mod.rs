@@ -9,6 +9,7 @@ mod landscape;
 mod plants;
 mod roads;
 mod scenery;
+mod sites;
 mod terrain;
 mod terrain_material;
 mod tree_fall;
@@ -78,6 +79,7 @@ impl Plugin for WorldPlugin {
                 canopy::preload_canopies,
                 wildlife::preload_wildlife,
                 cordon::preload_cordon,
+                sites::preload_sites,
             ),
         )
         .add_systems(
@@ -90,6 +92,7 @@ impl Plugin for WorldPlugin {
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
                 cordon::prepare_cordon,
+                sites::spawn_sites,
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)

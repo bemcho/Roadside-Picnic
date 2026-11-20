@@ -86,6 +86,7 @@ pub(super) fn tree_sites(terrain: &Terrain, tile: IVec2) -> Vec<TreeSite> {
             if x.abs() > limit
                 || z.abs() > limit
                 || !near_landmark(Vec2::new(x, z))
+                || super::sites::clear_footprint(Vec2::new(x, z), FOOTPRINT * SCALE_RANGE.1)
                 || reserve_scenery(Vec2::new(x, z), FOOTPRINT * SCALE_RANGE.1)
             {
                 continue;

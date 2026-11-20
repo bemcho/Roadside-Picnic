@@ -95,7 +95,7 @@ pub struct Terrain {
 impl Terrain {
     pub fn new() -> Self {
         Self {
-            roads: RoadNetwork::new(|at| hills(at.x, at.y)),
+            roads: RoadNetwork::new(|at| regional_height(at.x, at.y)),
         }
     }
 
@@ -185,7 +185,7 @@ impl Terrain {
     }
 
     fn land_height(&self, x: f32, z: f32, wetlands: &Wetlands) -> f32 {
-        let mut h = hills(x, z) + mountains(x, z) + frontier_relief(x, z);
+        let mut h = regional_height(x, z);
 
         // Bald hill: a smooth scorched mound.
         let bdx = x - BALD_CENTER.0;
@@ -217,6 +217,10 @@ impl Terrain {
             h = lerp(h, road.height, road.mask() * 0.85);
         }
         h = wetlands.soil_height(x, z, h);
+
+        if let Some((site, weight)) = super::sites::foundation(Vec2::new(x, z)) {
+            h = lerp(h, regional_height(site.x, site.y), weight);
+        }
 
         // Base: levelled flat for the yard.
         let pad = self.base_mask(x, z);
@@ -260,7 +264,9 @@ impl Terrain {
 
         let off_road = 1.0 - smoothstep(0.05, 0.3, self.road_mask(x, z));
         let off_base = 1.0 - self.base_mask(x, z);
-        if outside_quarry * off_road * off_base == 0.0 {
+        if outside_quarry * off_road * off_base == 0.0
+            || super::sites::clear_footprint(Vec2::new(x, z), 0.0)
+        {
             return 0.0;
         }
         let (h, wetlands) = self.sample(x, z);
@@ -409,6 +415,10 @@ fn edge_segment(at: Vec2) -> Option<(Vec2, Vec2, f32)> {
     }
     let a = at - axis * offset;
     Some((a, a + axis * step, offset / step))
+}
+
+fn regional_height(x: f32, z: f32) -> f32 {
+    hills(x, z) + mountains(x, z) + frontier_relief(x, z)
 }
 
 fn hills(x: f32, z: f32) -> f32 {

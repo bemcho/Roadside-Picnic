@@ -41,7 +41,7 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Terrain** (`src/world/terrain.rs`) is a deterministic 3.44 km square built in
   128 m chunks: mountains, rolling hills, the old quarry and bald hill. The
   graded dirt network (`src/world/roads.rs`) leads from the hangar checkpoint
-  to the quarry, bald hill, swamp overlook, lakeshore, and main river ford.
+  to the quarry, bald hill, swamp overlook, lakeshore, river fords, and outlying sites.
   The same network keeps vegetation off the lanes and paints a world-space
   gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
@@ -105,6 +105,16 @@ The upper-right in-game HUD shows the smoothed frame rate.
   2048 px, bake tangents with `--vertex-layout separate`, then ground with
   `tools/prepare_plant_asset.py`. Re-sample `src/world/pillars/site_checkpoint.rs`
   with `tools/trim_tree_base.py` after editing the checkpoint geometry.
+- **Sites** (`src/world/sites.rs`): two placements each of the supplied brick
+  factory, cemetery, garage, plague quarter, railway embankment, schoolhouse,
+  silos, and substation. Each roadside approach faces the model's +X entrance.
+  Level pads keep foundations grounded and scenery clear; collision streams
+  with nearby terrain and landmark groves use the existing canopy budget.
+  Resize their albedo to 1536 px, bake tangents with `--vertex-layout separate`,
+  and ground with `tools/prepare_plant_asset.py`. Trim the factory's display
+  plane with `tools/trim_tree_base.py` at `0.105` of grounded height before
+  final tangents. Use the same tool to sample collision at cut `0`, passing
+  `--split-columns` for the garage so its roof does not block the open bay.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
