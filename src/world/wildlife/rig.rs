@@ -36,7 +36,9 @@ mod tests {
         let feet: Vec<_> = bones(Kind::Heron)
             .into_iter()
             .filter_map(|bone| {
-                let Bone::Foot { tip, .. } = bone else { return None };
+                let Bone::Foot { tip, .. } = bone else {
+                    return None;
+                };
                 let foot = bone_pose(bone, &motion, &at, Transform::IDENTITY, &terrain);
                 let posed = at.transform_point(foot.translation);
                 let clearance = posed.y - terrain.mesh_height_at(posed.xz()) - tip.y * at.scale.y;
@@ -57,11 +59,17 @@ mod tests {
             motion.air = 1.0;
             let at = motion.initial_pose(&terrain);
             let angles = |motion: &Wildlife| {
-                bones(kind).into_iter().filter_map(|bone| {
-                    let Bone::Wing { side, .. } = bone else { return None };
-                    let rotation = bone_pose(bone, motion, &at, Transform::IDENTITY, &terrain).rotation;
-                    Some(rotation.to_euler(EulerRot::XYZ).2 * side)
-                }).collect::<Vec<_>>()
+                bones(kind)
+                    .into_iter()
+                    .filter_map(|bone| {
+                        let Bone::Wing { side, .. } = bone else {
+                            return None;
+                        };
+                        let rotation =
+                            bone_pose(bone, motion, &at, Transform::IDENTITY, &terrain).rotation;
+                        Some(rotation.to_euler(EulerRot::XYZ).2 * side)
+                    })
+                    .collect::<Vec<_>>()
             };
             let before = angles(&motion);
             motion.age += 0.10;
@@ -434,7 +442,8 @@ fn wingbeat(motion: &Wildlife) -> f32 {
     };
     let t = motion.age + motion.phase();
     let flutter = (t * rate * TAU).sin() - (t * rate * TAU * 2.0).sin() * 0.14;
-    0.09 + flutter * (0.50 + glide * 0.5 * ((t * 1.2).sin() - 1.0))
+    let glide_phase = 0.5 + 0.5 * (t * 1.2).sin();
+    0.09 + flutter * (0.56 * (1.0 - glide * (1.0 - glide_phase)))
 }
 
 fn bone_pose(
@@ -450,9 +459,10 @@ fn bone_pose(
             (motion.gait * 2.0 * TAU).cos() * 0.009 * motion.pace * (1.0 - motion.air),
             0.0,
         ),
-        Bone::Foot { tip, phase, .. } => {
+        Bone::Foot { tip, hip, phase, .. } => {
             let (stride_phase, lift) = step_cycle(motion.gait + phase);
-            let forward = stride_phase * stride(motion.kind, motion.run) * motion.pace;
+            let pounce = if motion.kind == Kind::Frostwolf && tip.z > 0.2 { motion.lunge } else { 0.0 };
+            let forward = stride_phase * stride(motion.kind, motion.run) * motion.pace + 0.08 * pounce;
             let foot_at = at.transform_point(body.transform_point(tip + Vec3::Z * forward));
             let ground = if motion.air < 0.6 {
                 (terrain.mesh_height_at(foot_at.xz()) + 0.012 + tip.y * at.scale.y - foot_at.y)
@@ -460,15 +470,21 @@ fn bone_pose(
             } else {
                 0.0
             };
-            let walking = Vec3::new(
+            let mut posed = tip + Vec3::new(
                 0.0,
-                ground.clamp(-0.15, 0.15) + lift * (0.075 + motion.run * 0.065) * motion.pace,
+                ground.clamp(-0.15, 0.15) + lift * (0.075 + motion.run * 0.065) * motion.pace + 0.10 * pounce,
                 forward,
             );
-            let tuck = Vec3::new(0.0, 0.15, -0.09);
-            Transform::from_translation(tip + walking.lerp(tuck, motion.air)).with_rotation(
-                Quat::from_rotation_x(lift * 0.16 * motion.pace - motion.air * 0.34),
-            )
+            // Hold the foot's height but limit stride reach so the skin cannot stretch a planted leg.
+            let rest = tip - hip;
+            let reach = (1.12 * rest.length_squared() - (posed.x - hip.x).powi(2) - (posed.y - hip.y).powi(2))
+                .max(0.0).sqrt();
+            posed.z = posed.z.clamp(hip.z - reach, hip.z + reach);
+            posed = posed.lerp(tip + Vec3::new(0.0, 0.19, -0.15), motion.air);
+            let leg = posed - hip;
+            let bend = (rest.y * leg.z - rest.z * leg.y).atan2(rest.y * leg.y + rest.z * leg.z);
+            Transform::from_translation(posed)
+                .with_rotation(Quat::from_rotation_x(bend * 0.35 + lift * 0.11 * motion.pace))
         }
         Bone::Head(neck) => {
             let scan = (motion.age * 1.2 + motion.phase()).sin()
@@ -548,7 +564,6 @@ pub(in crate::world) fn pose_wildlife(
                     ));
                 }
             }
-
         }
     }
 }
