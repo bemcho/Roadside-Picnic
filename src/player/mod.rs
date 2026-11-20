@@ -23,7 +23,9 @@ use animation::{
     pause_stalker_animation, pose_stalker_body, resume_stalker_animation,
 };
 use camera::{LOOK_HEIGHT, OrbitCamera, follow_player, grab_cursor_while_orbiting, orbit_camera};
-use vehicle::{Driver, Driving, Vehicle, drive_vehicle, interact_vehicle, pose_wheels};
+use vehicle::{
+    Driver, Driving, Vehicle, drive_vehicle, interact_vehicle, pose_wheels, sync_spotlight,
+};
 
 pub struct PlayerPlugin;
 
@@ -103,6 +105,7 @@ impl Plugin for PlayerPlugin {
                     move_player,
                     drive_vehicle,
                     pose_wheels,
+                    sync_spotlight,
                     follow_player,
                     animate_stalker,
                     pose_stalker_body,

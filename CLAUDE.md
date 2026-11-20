@@ -68,7 +68,8 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   panel, steel, and trim textures from the four hangar reference boards.
   A local light probe keeps the interior dim; pendants and wall lights light the floor in pools.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
-  independent wheel pivots. `tools/prepare_vehicle_asset.py` rebuilds the GLB with
+  independent wheel pivots and a forward spotlight that turns on while occupied.
+  `tools/prepare_vehicle_asset.py` rebuilds the GLB with
   UVs and embedded material maps from four reference sheets. Regenerate
   `src/world/pillars/armored_vehicle.rs` with `tools/trim_tree_base.py` after mesh changes.
 - **Collision** (`src/world/collision.rs`): every solid model carries a `Collider`, a

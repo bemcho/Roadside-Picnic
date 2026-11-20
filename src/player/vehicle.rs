@@ -1,7 +1,8 @@
 //! Driving, collision, and wheel posing for the armored vehicle.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
 
@@ -49,6 +50,9 @@ pub(super) struct Wheel {
     front: bool,
 }
 
+#[derive(Component)]
+pub(super) struct VehicleSpotlight;
+
 pub(crate) fn parked_vehicle(floor: Vec3) -> Transform {
     Transform::from_translation(floor + Vec3::new(8.5, 0.0, 8.5))
         .with_rotation(Quat::from_rotation_y(-0.59))
@@ -69,16 +73,80 @@ pub(crate) fn spawn_vehicle(
     commands: &mut Commands,
     assets: &AssetServer,
     transform: Transform,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
 ) -> Entity {
-    commands
-        .spawn((
-            Vehicle::default(),
-            Collider(COLLISION),
-            transform.with_scale(Vec3::splat(MODEL_SCALE)),
-            WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(assets::BASE_VEHICLE))),
+    let mut vehicle = commands.spawn((
+        Vehicle::default(),
+        Collider(COLLISION),
+        transform.with_scale(Vec3::splat(MODEL_SCALE)),
+        WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(assets::BASE_VEHICLE))),
+    ));
+    vehicle.observe(attach_wheels);
+    mount_spotlight(&mut vehicle, meshes, materials);
+    vehicle.id()
+}
+
+fn mount_spotlight(
+    vehicle: &mut EntityCommands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    // Grille mount in model coordinates; local +Z is the vehicle's nose.
+    let mount =
+        Transform::from_xyz(0.0, 0.255, 0.473).looking_to(FORWARD - Vec3::Y * 0.19, Vec3::Y);
+    vehicle.with_children(|body| {
+        body.spawn((
+            Mesh3d(meshes.add(Cylinder::new(0.034, 0.044))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.18, 0.19, 0.20),
+                metallic: 0.55,
+                perceptual_roughness: 0.56,
+                ..default()
+            })),
+            mount.with_rotation(mount.rotation * Quat::from_rotation_x(FRAC_PI_2)),
+        ));
+        body.spawn((
+            VehicleSpotlight,
+            SpotLight {
+                color: Color::srgb(0.91, 0.96, 1.0),
+                intensity: 2.2e7,
+                range: 32.0,
+                radius: 0.16,
+                inner_angle: 0.19,
+                outer_angle: 0.37,
+                shadow_maps_enabled: true,
+                ..default()
+            },
+            Visibility::Hidden,
+            Transform::from_translation(mount.transform_point(Vec3::NEG_Z * 0.03))
+                .with_rotation(mount.rotation),
         ))
-        .observe(attach_wheels)
-        .id()
+        .with_child((
+            Mesh3d(meshes.add(Circle::new(0.028))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                emissive: LinearRgba::rgb(0.85, 0.93, 1.0) * 24_000.0,
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 0.0, 0.007).with_rotation(Quat::from_rotation_y(PI)),
+            NotShadowCaster,
+        ));
+    });
+}
+
+pub(super) fn sync_spotlight(
+    driver: Query<&Driving, With<Player>>,
+    mut spotlights: Query<(&ChildOf, &mut Visibility), With<VehicleSpotlight>>,
+) {
+    let occupied = driver.single().ok().map(|driver| driver.0);
+    for (vehicle, mut visibility) in &mut spotlights {
+        let next = if Some(vehicle.parent()) == occupied {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        visibility.set_if_neq(next);
+    }
 }
 
 fn attach_wheels(
@@ -329,10 +397,14 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(
                 Update,
-                (interact_vehicle, drive_vehicle, pose_wheels).chain(),
+                (interact_vehicle, drive_vehicle, pose_wheels, sync_spotlight).chain(),
             );
         let original = Transform::from_xyz(flat.x, floor + GROUND_CLEARANCE, flat.y);
         let vehicle = app.world_mut().spawn((Vehicle::default(), original)).id();
+        let spotlight = app
+            .world_mut()
+            .spawn((VehicleSpotlight, Visibility::Hidden, ChildOf(vehicle)))
+            .id();
         let wheel = app
             .world_mut()
             .spawn((
@@ -356,6 +428,10 @@ mod tests {
         press(&mut app, KeyCode::KeyE);
         app.update();
         assert!(app.world().get::<Driving>(player).is_none());
+        assert_eq!(
+            app.world().get::<Visibility>(spotlight),
+            Some(&Visibility::Hidden)
+        );
         release(&mut app, KeyCode::KeyE);
         app.world_mut()
             .get_mut::<Transform>(player)
@@ -372,6 +448,10 @@ mod tests {
         assert_eq!(
             app.world().get::<Visibility>(player),
             Some(&Visibility::Hidden)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(spotlight),
+            Some(&Visibility::Inherited)
         );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -404,6 +484,10 @@ mod tests {
         assert_eq!(
             app.world().get::<Visibility>(player),
             Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(spotlight),
+            Some(&Visibility::Hidden)
         );
         let feet = app
             .world()

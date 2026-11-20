@@ -190,6 +190,8 @@ pub(super) fn spawn_base(
         &mut commands,
         &asset_server,
         parked_vehicle(Vec3::new(BASE.0, floor, BASE.1)),
+        &mut meshes,
+        &mut materials,
     );
     commands.entity(vehicle).insert(WorldRoot);
     spawn_hall_probe(&mut commands, hall, &mut images);
