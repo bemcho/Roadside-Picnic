@@ -53,6 +53,15 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 - **Scenery** (`src/world/scenery.rs`): dense, deterministic pine groves and
   textured rock outcrops are drawn in chunk batches. Colliders and detailed
   undergrowth stream in a 3×3 chunk neighborhood around the stalker.
+- **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
+  shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
+  The five shared GLBs live in `assets/models/plants/`; regenerate them with
+  glTF Transform `simplify --ratio 0.002 --error 0.005` (`--ratio 0.0015
+  --error 0.018` for shrub and glowweed), `resize --width 1024 --height 1024`,
+  and `tangents` (all with `--vertex-layout separate`), then
+  `tools/prepare_plant_asset.py`.
+  The script grounds roots, bakes the glowweed mask, and removes the thornbush's
+  detached display plaque. Only the two woody bushes have collision.
 - **Fauna** (`src/world/trees.rs`): four extracted, textured models
   (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
@@ -78,6 +87,8 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   probe and warm pendants keep the interior dim without changing outdoor lighting.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
+  The chassis and suspension sample the rendered terrain under the wheels.
+  Slopes beyond tire grip cause downhill sliding; the car and stalker fall at 9.81 m/s².
   `tools/prepare_vehicle_asset.py` rebuilds the GLB with
   UVs and embedded material maps from four reference sheets. Regenerate
   `src/world/pillars/armored_vehicle.rs` with `tools/trim_tree_base.py` after mesh changes.

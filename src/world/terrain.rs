@@ -81,6 +81,24 @@ impl Terrain {
         self.sample(x, z).0
     }
 
+    /// Height on the rendered tile triangles, including between grid vertices.
+    pub(crate) fn mesh_height_at(&self, at: Vec2) -> f32 {
+        let grid = at / SPACING;
+        let cell = grid.floor() * SPACING;
+        let uv = grid - grid.floor();
+        let x = cell.x + SPACING;
+        let z = cell.y + SPACING;
+        let b = self.height_at(x, cell.y);
+        let c = self.height_at(cell.x, z);
+        if uv.x + uv.y <= 1.0 {
+            let a = self.height_at(cell.x, cell.y);
+            a + (b - a) * uv.x + (c - a) * uv.y
+        } else {
+            let d = self.height_at(x, z);
+            d + (c - d) * (1.0 - uv.x) + (b - d) * (1.0 - uv.y)
+        }
+    }
+
     pub(crate) fn water_depth_at(&self, x: f32, z: f32) -> f32 {
         let wetlands = Wetlands::at(x, z);
         let h = self.land_height(x, z, &wetlands);

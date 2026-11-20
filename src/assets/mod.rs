@@ -25,6 +25,11 @@ pub const FAUNA_DEAD_FOREST: &str = "models/fauna/dead_forest.glb";
 pub const FAUNA_OVERGROWTH: &str = "models/fauna/overgrowth.glb";
 pub const FAUNA_MUD_BOG: &str = "models/fauna/mud_bog.glb";
 pub const FAUNA_SLIME_DITCH: &str = "models/fauna/slime_ditch.glb";
+pub const DRY_GRASS: &str = "models/plants/drygrass.glb";
+pub const GLOWWEED: &str = "models/plants/glowweed.glb";
+pub const HOGWEED: &str = "models/plants/hogweed.glb";
+pub const SHRUB: &str = "models/plants/shrub.glb";
+pub const THORNBUSH: &str = "models/plants/thornbush.glb";
 pub const BASE_HANGAR: &str = "models/base/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
 

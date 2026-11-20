@@ -1,5 +1,7 @@
 //! Driving, collision, and wheel posing for the armored vehicle.
 
+mod contact;
+
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use bevy::light::NotShadowCaster;
@@ -9,24 +11,44 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets;
 use crate::world::{Collider, Pillar, STEP_HEIGHT, TERRAIN_HALF_SIZE, Terrain, push_out};
 
-use super::{Locomotion, Player, STANDING, camera::OrbitCamera};
+use super::{GRAVITY, Locomotion, Player, STANDING, camera::OrbitCamera, freefall};
 
 const MODEL_SCALE: f32 = 5.2;
 const WHEEL_RADIUS: f32 = 0.1008 * MODEL_SCALE;
 const HALF_EXTENTS: Vec2 = Vec2::new(0.283 * MODEL_SCALE, 0.5 * MODEL_SCALE);
 const HULL_HEIGHT: f32 = 0.47 * MODEL_SCALE;
-const GROUND_CLEARANCE: f32 = 0.02;
+const GROUND_CLEARANCE: f32 = 0.035;
 const ENTRY_REACH: f32 = 1.65;
 const FORD_DEPTH: f32 = 0.60;
+const MAX_GRIP_GRADE: f32 = 0.66;
+const CONTACT_SNAP: f32 = 0.014;
 const FORWARD: Vec3 = Vec3::Z;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const COLLISION: &[Pillar] = include!("../world/pillars/armored_vehicle.rs");
 
-#[derive(Component, Default)]
+#[derive(Component)]
 pub(crate) struct Vehicle {
     speed: f32,
     roll: f32,
     steer: f32,
+    slide: Vec2,
+    vertical_speed: f32,
+    grounded: bool,
+    suspension: [Vec3; 4],
+}
+
+impl Default for Vehicle {
+    fn default() -> Self {
+        Self {
+            speed: 0.0,
+            roll: 0.0,
+            steer: 0.0,
+            slide: Vec2::ZERO,
+            vertical_speed: 0.0,
+            grounded: true,
+            suspension: [Vec3::ZERO; 4],
+        }
+    }
 }
 
 #[derive(Component)]
@@ -48,14 +70,15 @@ pub(super) type Driver<'w, 's> = Query<
 #[derive(Component)]
 pub(super) struct Wheel {
     vehicle: Entity,
-    front: bool,
+    slot: usize,
+    rest: Vec3,
 }
 
 #[derive(Component)]
 pub(super) struct VehicleSpotlight;
 
 pub(crate) fn parked_vehicle(floor: Vec3) -> Transform {
-    Transform::from_translation(floor + Vec3::new(8.5, 0.0, 8.5))
+    Transform::from_translation(floor + Vec3::new(8.5, GROUND_CLEARANCE, 8.5))
         .with_rotation(Quat::from_rotation_y(-0.59))
 }
 
@@ -154,20 +177,23 @@ fn attach_wheels(
     ready: On<WorldInstanceReady>,
     mut commands: Commands,
     children: Query<&Children>,
-    names: Query<&Name>,
+    wheels: Query<(&Name, &Transform)>,
 ) {
     for entity in children.iter_descendants(ready.entity) {
-        let Ok(name) = names.get(entity) else {
+        let Ok((name, transform)) = wheels.get(entity) else {
             continue;
         };
-        let front = match name.as_str() {
-            "WheelFrontLeft" | "WheelFrontRight" => true,
-            "WheelRearLeft" | "WheelRearRight" => false,
+        let slot = match name.as_str() {
+            "WheelFrontRight" => 0,
+            "WheelFrontLeft" => 1,
+            "WheelRearRight" => 2,
+            "WheelRearLeft" => 3,
             _ => continue,
         };
         commands.entity(entity).insert(Wheel {
             vehicle: ready.entity,
-            front,
+            slot,
+            rest: transform.translation,
         });
     }
 }
@@ -204,14 +230,16 @@ pub(super) fn interact_vehicle(
         let Ok((entity, mut vehicle, at)) = vehicles.get_mut(driving.0) else {
             return;
         };
-        if let Some(exit) = exit_position(at, &terrain, |point| {
-            push_out(
-                point.xz(),
-                point.y,
-                STANDING,
-                other_colliders(&colliders, entity),
-            ) == point.xz()
-        }) {
+        if vehicle.grounded
+            && let Some(exit) = exit_position(at, &terrain, |point| {
+                push_out(
+                    point.xz(),
+                    point.y,
+                    STANDING,
+                    other_colliders(&colliders, entity),
+                ) == point.xz()
+            })
+        {
             vehicle.park();
             feet.translation = exit;
             *locomotion = grounded_idle();
@@ -244,6 +272,7 @@ fn grounded_idle() -> Locomotion {
 
 fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool) -> Option<Vec3> {
     let (side, end) = (HALF_EXTENTS.x, HALF_EXTENTS.y);
+    let heading = contact::heading(at.rotation);
     [
         Vec3::X * side,
         Vec3::NEG_X * side,
@@ -253,7 +282,7 @@ fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool
     .into_iter()
     .find_map(|edge| {
         let sample = |reach: f32| {
-            let mut point = at.translation + at.rotation * (edge + edge.normalize() * reach);
+            let mut point = at.translation + heading * (edge + edge.normalize() * reach);
             point.y = terrain.height_at(point.x, point.z);
             point
         };
@@ -272,64 +301,217 @@ pub(super) fn drive_vehicle(
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
     colliders: Query<(Entity, &Collider, &GlobalTransform)>,
-    mut vehicles: Query<(&mut Vehicle, &mut Transform), Without<Player>>,
+    mut vehicles: Query<(Entity, &mut Vehicle, &mut Transform), Without<Player>>,
     mut players: Query<(&Driving, &mut Transform), With<Player>>,
     mut cameras: Query<&mut OrbitCamera>,
 ) {
-    let Ok((driving, mut player)) = players.single_mut() else {
-        return;
+    let mut driver = players.single_mut().ok();
+    let dt = time.delta_secs();
+    let steps = (dt / 0.025).ceil() as u32;
+    for (entity, mut vehicle, mut at) in &mut vehicles {
+        let occupied = driver
+            .as_ref()
+            .is_some_and(|(driving, _)| driving.0 == entity);
+        let input = DriveInput {
+            brake: !occupied || keys.pressed(KeyCode::Space),
+            throttle: if occupied {
+                axis(&keys, KeyCode::KeyW, KeyCode::KeyS)
+            } else {
+                0.0
+            },
+            steering: if occupied {
+                axis(&keys, KeyCode::KeyA, KeyCode::KeyD)
+            } else {
+                0.0
+            },
+        };
+        let mut turned = 0.0;
+        for _ in 0..steps {
+            turned += drive_step(
+                &mut vehicle,
+                &mut at,
+                &terrain,
+                input,
+                dt / steps as f32,
+                |next| blocked(next, other_colliders(&colliders, entity)),
+            );
+        }
+        if occupied && let Some((_, player)) = &mut driver {
+            player.translation = at.translation;
+            if let Ok(mut orbit) = cameras.single_mut() {
+                orbit.yaw += turned;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DriveInput {
+    throttle: f32,
+    steering: f32,
+    brake: bool,
+}
+
+fn drive_step(
+    vehicle: &mut Vehicle,
+    at: &mut Transform,
+    terrain: &Terrain,
+    input: DriveInput,
+    dt: f32,
+    collides: impl FnOnce(&Transform) -> bool,
+) -> f32 {
+    let from = at.translation.xz();
+    let yaw = contact::heading(at.rotation);
+    let sample = |center, heading| contact::sample(center, heading, |p| terrain.mesh_height_at(p));
+    let contact = sample(from, yaw);
+    let grounded = vehicle.grounded && at.translation.y <= contact.height + CONTACT_SNAP;
+    if grounded {
+        apply_traction(
+            vehicle,
+            terrain,
+            from,
+            yaw * FORWARD,
+            contact.up(),
+            input,
+            dt,
+        );
+    }
+    let mut turn = if grounded {
+        vehicle.steer * vehicle.speed * dt / 2.8
+    } else {
+        0.0
     };
-    let Ok((mut vehicle, mut at)) = vehicles.get_mut(driving.0) else {
-        return;
+    let next_yaw = Quat::from_rotation_y(turn) * yaw;
+    let delta = ((next_yaw * FORWARD).xz() * vehicle.speed + vehicle.slide) * dt;
+    let mut next = *at;
+    let mut support = contact;
+    if delta.length_squared() > 0.0 {
+        let to = from + delta;
+        let destination = sample(to, next_yaw);
+        let climbs_bank =
+            grounded && destination.height - support.height > MAX_GRIP_GRADE * delta.length();
+        if !climbs_bank
+            && to.abs().max_element() <= TERRAIN_HALF_SIZE - HALF_EXTENTS.length()
+            && terrain.can_wade(from, to, FORD_DEPTH)
+        {
+            next.translation.x = to.x;
+            next.translation.z = to.y;
+            support = destination;
+        }
+    }
+    let mut moved = next.translation.xz() != from;
+    if !moved {
+        turn = 0.0;
+    }
+    let (mut vy, mut landed) = settle(
+        &mut next,
+        at,
+        &support,
+        vehicle.vertical_speed,
+        grounded,
+        turn,
+        dt,
+    );
+    if moved && collides(&next) {
+        next = *at;
+        support = contact;
+        (vy, landed) = settle(
+            &mut next,
+            at,
+            &support,
+            vehicle.vertical_speed,
+            grounded,
+            0.0,
+            dt,
+        );
+        moved = false;
+        turn = 0.0;
+    }
+    if !moved && delta.length_squared() > 0.0 {
+        vehicle.speed = 0.0;
+        vehicle.slide = Vec2::ZERO;
+    }
+    if grounded && landed {
+        let forward = next.rotation * FORWARD;
+        let distance =
+            (next.translation.xz() - from).dot(forward.xz()) / forward.xz().length_squared();
+        vehicle.roll = (vehicle.roll + distance / WHEEL_RADIUS).rem_euclid(TAU);
+    }
+    vehicle.grounded = landed;
+    vehicle.vertical_speed = vy;
+    vehicle.suspension = if landed {
+        support.suspension()
+    } else {
+        [Vec3::ZERO; 4]
     };
-    let brake = keys.pressed(KeyCode::Space);
-    let throttle = axis(&keys, KeyCode::KeyW, KeyCode::KeyS);
-    let steering = axis(&keys, KeyCode::KeyA, KeyCode::KeyD);
-    let target = if brake {
+    *at = next;
+    turn
+}
+
+fn apply_traction(
+    vehicle: &mut Vehicle,
+    terrain: &Terrain,
+    at: Vec2,
+    forward: Vec3,
+    up: Vec3,
+    input: DriveInput,
+    dt: f32,
+) {
+    let target = if input.brake {
         0.0
     } else {
-        let water = terrain.water_depth_at(at.translation.x, at.translation.z);
-        let speed = if throttle >= 0.0 { 10.0 } else { 4.0 };
-        throttle * speed * (1.0 - 0.60 * water.min(FORD_DEPTH))
+        let water = terrain.water_depth_at(at.x, at.y);
+        let speed = if input.throttle >= 0.0 { 10.0 } else { 4.0 };
+        input.throttle * speed * (1.0 - 0.60 * water.min(FORD_DEPTH))
     };
-    let dt = time.delta_secs();
-    let steps = (dt / 0.04).ceil().max(1.0) as u32;
-    let dt = dt / steps as f32;
-    let mut turned = 0.0;
-    for _ in 0..steps {
-        let acceleration = if brake {
-            18.0
-        } else if throttle == 0.0 {
-            3.5
-        } else {
-            6.0
-        };
-        vehicle.speed += (target - vehicle.speed).clamp(-acceleration * dt, acceleration * dt);
-        vehicle.steer += (steering * 0.48 - vehicle.steer).clamp(-3.0 * dt, 3.0 * dt);
-        let distance = vehicle.speed * dt;
-        if distance == 0.0 {
-            continue;
-        }
-        let mut next = *at;
-        let turn = vehicle.steer * distance / 2.8;
-        next.rotate_y(turn);
-        next.translation += next.rotation * FORWARD * distance;
-        next.translation.y =
-            terrain.height_at(next.translation.x, next.translation.z) + GROUND_CLEARANCE;
-        if next.translation.xz().abs().max_element() > TERRAIN_HALF_SIZE - HALF_EXTENTS.length()
-            || !terrain.can_wade(at.translation.xz(), next.translation.xz(), FORD_DEPTH)
-            || blocked(&next, other_colliders(&colliders, driving.0))
-        {
-            vehicle.speed = 0.0;
-            break;
-        }
-        vehicle.roll = (vehicle.roll + distance / WHEEL_RADIUS).rem_euclid(TAU);
-        turned += turn;
-        *at = next;
+    let acceleration = if input.brake {
+        18.0
+    } else if input.throttle == 0.0 {
+        3.5
+    } else {
+        6.0
+    };
+    vehicle.speed += (target - vehicle.speed).clamp(-acceleration * dt, acceleration * dt);
+    vehicle.steer += (input.steering * 0.48 - vehicle.steer).clamp(-3.0 * dt, 3.0 * dt);
+
+    let downhill = up.xz();
+    if downhill.length() > MAX_GRIP_GRADE * up.y && downhill.dot(forward.xz()) * vehicle.speed < 0.0
+    {
+        vehicle.speed = 0.0;
     }
-    player.translation = at.translation;
-    if let Ok(mut orbit) = cameras.single_mut() {
-        orbit.yaw += turned;
+    // Resolve gravity and available tire friction along the ground plane.
+    vehicle.slide = (vehicle.slide + downhill * (GRAVITY * up.y * dt))
+        .move_towards(Vec2::ZERO, MAX_GRIP_GRADE * GRAVITY * up.y * up.y * dt)
+        .clamp_length_max(12.0);
+}
+
+fn settle(
+    next: &mut Transform,
+    from: &Transform,
+    support: &contact::Contact,
+    vy: f32,
+    grounded: bool,
+    turn: f32,
+    dt: f32,
+) -> (f32, bool) {
+    let prior_up = from.rotation * Vec3::Y;
+    let travel = next.translation.xz() - from.translation.xz();
+    let vy = if grounded {
+        -prior_up.xz().dot(travel) / (prior_up.y * dt)
+    } else {
+        vy
+    };
+    let (fall_y, vy) = freefall(from.translation.y, vy, dt);
+    if fall_y <= support.height + CONTACT_SNAP {
+        next.translation.y = support.height;
+        if travel != Vec2::ZERO || from.rotation.dot(support.rotation).abs() < 0.9999999 {
+            next.rotation = support.rotation;
+        }
+        (0.0, true)
+    } else {
+        next.translation.y = fall_y;
+        next.rotation = Quat::from_rotation_y(turn) * from.rotation;
+        (vy, false)
     }
 }
 
@@ -351,21 +533,27 @@ pub(crate) fn blocked<'a>(
     at: &Transform,
     colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
 ) -> bool {
-    let world_to_vehicle = at.rotation.inverse();
+    let heading = contact::heading(at.rotation);
+    let world_to_vehicle = heading.inverse();
+    let up = at.rotation * Vec3::Y;
     colliders.into_iter().any(|(collider, transform)| {
-        let (scale, _, origin) = transform.to_scale_rotation_translation();
+        let (scale, _, _) = transform.to_scale_rotation_translation();
         collider.0.iter().any(|pillar| {
-            let top = origin.y + pillar.top * scale.y;
-            let bottom = origin.y + pillar.bottom * scale.y;
-            if top <= at.translation.y + STEP_HEIGHT || bottom >= at.translation.y + HULL_HEIGHT {
-                return false;
-            }
             let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
             let local = (world_to_vehicle * (center - at.translation)).xz();
-            (local.abs() - HALF_EXTENTS)
+            if (local.abs() - HALF_EXTENTS)
                 .max(Vec2::ZERO)
                 .length_squared()
-                < (pillar.radius * scale.x).powi(2)
+                >= (pillar.radius * scale.x).powi(2)
+            {
+                return false;
+            }
+            let p = local.clamp(-HALF_EXTENTS, HALF_EXTENTS);
+            let offset = heading * Vec3::new(p.x, 0.0, p.y);
+            let base = at.translation.y - up.dot(offset) / up.y;
+            let top = center.y + pillar.top * scale.y;
+            let bottom = center.y + pillar.bottom * scale.y;
+            top > base + STEP_HEIGHT && bottom < base + HULL_HEIGHT
         })
     })
 }
@@ -375,7 +563,8 @@ pub(super) fn pose_wheels(vehicles: Query<&Vehicle>, mut wheels: Query<(&Wheel, 
         let Ok(vehicle) = vehicles.get(wheel.vehicle) else {
             continue;
         };
-        let steer = if wheel.front { vehicle.steer } else { 0.0 };
+        let steer = if wheel.slot < 2 { vehicle.steer } else { 0.0 };
+        transform.translation = wheel.rest + vehicle.suspension[wheel.slot];
         transform.rotation = Quat::from_rotation_y(steer) * Quat::from_rotation_x(vehicle.roll);
     }
 }
@@ -416,7 +605,8 @@ mod tests {
                 Transform::default(),
                 Wheel {
                     vehicle,
-                    front: true,
+                    slot: 0,
+                    rest: Vec3::ZERO,
                 },
             ))
             .id();
@@ -501,6 +691,78 @@ mod tests {
             .translation;
         assert!(vehicle_distance(&driven, feet) >= STANDING.radius);
         assert_eq!(app.world().get::<Transform>(vehicle), Some(&driven));
+    }
+
+    #[test]
+    fn an_unsupported_vehicle_falls_on_earth_even_when_unoccupied() {
+        let mut app = App::new();
+        let terrain = Terrain::new();
+        let ground = terrain.height_at(40.0, -128.0);
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(terrain)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, drive_vehicle);
+        let car = app
+            .world_mut()
+            .spawn((
+                Vehicle::default(),
+                Transform::from_xyz(40.0, ground + 8.0, -128.0),
+            ))
+            .id();
+        app.update();
+        for _ in 0..10 {
+            app.update();
+        }
+        let height = app
+            .world()
+            .get::<Transform>(car)
+            .expect("falling car")
+            .translation
+            .y
+            - ground;
+        assert!(
+            (height - (8.0 - 0.5 * 9.81 * 0.5_f32.powi(2))).abs() < 0.015,
+            "car is {height} m above ground"
+        );
+        for _ in 0..30 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(car)
+            .expect("landed car")
+            .translation;
+        assert!((at.y - ground - GROUND_CLEARANCE).abs() < 0.005);
+    }
+
+    #[test]
+    fn throttle_and_brakes_cannot_hold_the_car_on_the_quarry_wall() {
+        let terrain = Terrain::new();
+        let from = Vec2::new(70.0, 14.0);
+        let yaw = Quat::from_rotation_y(PI);
+        let support = contact::sample(from, yaw, |at| terrain.mesh_height_at(at));
+        assert!(support.up().z > MAX_GRIP_GRADE * support.up().y);
+        for brake in [false, true] {
+            let mut at =
+                Transform::from_xyz(from.x, support.height, from.y).with_rotation(support.rotation);
+            let mut vehicle = Vehicle::default();
+            let input = DriveInput {
+                throttle: 1.0,
+                steering: 0.0,
+                brake,
+            };
+            for _ in 0..50 {
+                drive_step(&mut vehicle, &mut at, &terrain, input, 0.02, |_| false);
+            }
+            assert!(
+                at.translation.z > from.y + 0.7,
+                "car clung to the wall at {at:?}"
+            );
+            assert!(at.translation.y < support.height - 0.7);
+        }
     }
 
     #[test]

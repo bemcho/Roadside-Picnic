@@ -52,17 +52,15 @@ pub fn push_out<'a>(
     colliders
         .into_iter()
         .fold(point, |point, (collider, transform)| {
-            let (scale, _, origin) = transform.to_scale_rotation_translation();
+            let (scale, _, _) = transform.to_scale_rotation_translation();
             collider.0.iter().fold(point, |point, pillar| {
-                let top = origin.y + pillar.top * scale.y;
-                let bottom = origin.y + pillar.bottom * scale.y;
+                let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+                let top = center.y + pillar.top * scale.y;
+                let bottom = center.y + pillar.bottom * scale.y;
                 if top <= feet + STEP_HEIGHT || bottom >= feet + body.height {
                     return point;
                 }
-                let center = transform
-                    .transform_point(Vec3::new(pillar.x, 0.0, pillar.z))
-                    .xz();
-                separate(point, center, pillar.radius * scale.x + body.radius)
+                separate(point, center.xz(), pillar.radius * scale.x + body.radius)
             })
         })
 }

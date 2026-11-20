@@ -32,8 +32,8 @@ pub struct PlayerPlugin;
 /// Scales the 0.977-unit model (origin at its soles) to a 1.8 m stalker.
 const MODEL_SCALE: f32 = 1.84;
 
-/// Downward acceleration while airborne, in m/s².
-const GRAVITY: f32 = 18.0;
+/// Earth gravity, in m/s².
+const GRAVITY: f32 = 9.81;
 
 /// How far inside the terrain edge the stalker must stay.
 const EDGE_MARGIN: f32 = 2.0;
@@ -65,7 +65,7 @@ impl Default for Player {
             walk_speed: 1.8,
             run_speed: 4.5,
             crawl_speed: 0.7,
-            jump_speed: 5.0,
+            jump_speed: 3.65,
         }
     }
 }
@@ -308,19 +308,21 @@ fn move_player(
 /// Advances height `y` with vertical speed `vy` over `dt` under gravity,
 /// landing on `ground`. Returns the new height, speed, and whether grounded.
 ///
-/// A grounded stalker without upward speed sticks to the ground, so walking
-/// downhill never counts as falling.
+/// The stalker follows ordinary steps downhill, but falls over larger drops.
 fn fall(y: f32, vy: f32, grounded: bool, ground: f32, dt: f32) -> (f32, f32, bool) {
-    if grounded && vy <= 0.0 {
+    if grounded && vy <= 0.0 && y <= ground + 0.5 {
         return (ground, 0.0, true);
     }
-    let vy = vy - GRAVITY * dt;
-    let y = y + vy * dt;
+    let (y, vy) = freefall(y, vy, dt);
     if y <= ground {
         (ground, 0.0, true)
     } else {
         (y, vy, false)
     }
+}
+
+fn freefall(y: f32, vy: f32, dt: f32) -> (f32, f32) {
+    (y + (vy - 0.5 * GRAVITY * dt) * dt, vy - GRAVITY * dt)
 }
 
 /// Keeps a point on the terrain: inside its edges and on its surface.
@@ -435,6 +437,14 @@ mod tests {
     fn walking_downhill_stays_grounded() {
         let (y, vy, grounded) = fall(10.0, 0.0, true, 9.5, 1.0 / 60.0);
         assert_eq!((y, vy, grounded), (9.5, 0.0, true));
+    }
+
+    #[test]
+    fn stepping_off_a_ledge_falls_instead_of_snapping_down() {
+        let (y, vy, grounded) = fall(5.0, 0.0, true, 0.0, 0.25);
+        assert!(!grounded);
+        assert!((y - 4.6934375).abs() < 0.001);
+        assert!((vy + 2.4525).abs() < 0.001);
     }
 
     /// An app that runs [`move_player`] at 20 Hz for a stalker at (0, 0)

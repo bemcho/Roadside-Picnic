@@ -91,7 +91,7 @@ pub(super) fn spawn_base(
     let vehicle = spawn_vehicle(
         &mut commands,
         &server,
-        parked_vehicle(pad + Vec3::Y * 0.035),
+        parked_vehicle(pad),
         &mut meshes,
         &mut materials,
     );

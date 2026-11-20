@@ -103,7 +103,10 @@ pub(super) fn follow_player(
     let height = if driving.is_some() { 2.1 } else { LOOK_HEIGHT };
     let focus = player.translation + Vec3::Y * height;
     let mut position = focus + orbit.offset();
-    let floor = terrain.height_at(position.x, position.z) + GROUND_CLEARANCE;
+    let floor = terrain
+        .height_at(position.x, position.z)
+        .max(terrain.mesh_height_at(position.xz()))
+        + GROUND_CLEARANCE;
     position.y = position.y.max(floor);
 
     camera.translation = position;

@@ -4,6 +4,7 @@ mod base;
 mod collision;
 mod hydrology;
 mod landscape;
+mod plants;
 mod scenery;
 mod terrain;
 mod terrain_material;
@@ -58,10 +59,22 @@ impl Plugin for WorldPlugin {
         ))
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()
-        .add_systems(Startup, (prepare_landscape, load_landscape_materials))
+        .add_systems(
+            Startup,
+            (
+                prepare_landscape,
+                load_landscape_materials,
+                plants::preload_plants,
+            ),
+        )
         .add_systems(
             OnEnter(AppState::InGame),
-            (spawn_world, spawn_sky, base::spawn_base),
+            (
+                spawn_world,
+                spawn_sky,
+                base::spawn_base,
+                plants::prepare_plant_materials,
+            ),
         )
         .add_systems(Update, mipmap_tiling_textures)
         .add_systems(PreUpdate, stream_scenery.run_if(in_state(AppState::InGame)))

@@ -12,6 +12,7 @@ use crate::player::Player;
 
 use super::collision::{Collider, Pillar};
 use super::hydrology::Wetlands;
+use super::plants::{self, PlantModels, PlantSite};
 use super::terrain::{TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise};
 use super::trees::{self, TreeSite};
 
@@ -57,6 +58,7 @@ impl Site {
 pub(super) struct Sites {
     pub solids: Vec<Site>,
     pub undergrowth: Vec<TreeSite>,
+    pub plants: Vec<PlantSite>,
 }
 
 #[derive(Resource)]
@@ -67,7 +69,7 @@ pub(super) struct Scenery {
     pub center: Option<IVec2>,
 }
 
-fn forest_density(x: f32, z: f32) -> f32 {
+pub(super) fn forest_density(x: f32, z: f32) -> f32 {
     let p = Vec2::new(x, z);
     let regions = [
         (Vec2::new(-232.0, -26.0), Vec2::new(239.0, 223.0)),
@@ -166,6 +168,7 @@ pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>
         Sites {
             solids: pines.into_iter().chain(rocks).collect(),
             undergrowth: trees::tree_sites(terrain, tile),
+            plants: plants::plant_sites(terrain, tile),
         },
         forest.finish(true),
         stone.finish(false),
@@ -176,6 +179,7 @@ pub(super) fn stream_scenery(
     mut commands: Commands,
     player: Single<&Transform, With<Player>>,
     server: Res<AssetServer>,
+    plants: Res<PlantModels>,
     mut scenery: ResMut<Scenery>,
 ) {
     let center = (player.translation.xz() / TILE_SIZE).floor().as_ivec2();
@@ -210,6 +214,7 @@ pub(super) fn stream_scenery(
                         objects.spawn((site.pose, site.solid()));
                     }
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
+                    plants::spawn_plants(objects, &plants, &sites.plants);
                 })
                 .id();
             scenery.active.insert(tile, entity);
@@ -479,6 +484,7 @@ mod tests {
     fn distant_colliders_unload_and_return_at_the_same_position() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
+            .init_resource::<PlantModels>()
             .add_systems(Update, stream_scenery);
         let root = app.world_mut().spawn(Transform::IDENTITY).id();
         let player = app
@@ -497,6 +503,7 @@ mod tests {
                 Sites {
                     solids: vec![boulder],
                     undergrowth: vec![],
+                    plants: vec![],
                 },
             )]
             .into_iter()
