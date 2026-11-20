@@ -10,6 +10,7 @@ pub const SPLASH_FAILED: &str = "Could not load the Zone. Close the game and try
 
 /// Title shown in the HUD corner.
 pub const HUD_TITLE: &str = "THE ZONE";
+pub const HUD_FPS_PENDING: &str = "FPS: --";
 
 /// Hint shown in the HUD corner.
 pub const HUD_CONTROLS_HINT: &str = "WASD: move | M: mute | ESC: pause | Q: quit";
@@ -30,4 +31,8 @@ pub const PAUSE_HINT: &str = "ESC — resume";
 /// Formats the per-run Zone statistics line for the HUD.
 pub fn hud_zone_stats(artifacts: u32, anomalies: u32) -> String {
     format!("Artifacts: {artifacts} | Anomalies triggered: {anomalies}")
+}
+
+pub fn hud_fps(fps: f64) -> String {
+    format!("FPS: {fps:.0}")
 }

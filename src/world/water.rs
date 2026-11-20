@@ -9,7 +9,7 @@ use bevy::shader::ShaderRef;
 use crate::assets::WATER_SHADER;
 
 use super::hydrology::WATER_LEVEL;
-use super::terrain::{CELLS, SPACING, TILE_SIZE, WaterVertex};
+use super::terrain::{TerrainGrid, WaterVertex};
 
 pub(super) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterRipples>;
 
@@ -66,19 +66,23 @@ impl Vertex {
 }
 
 /// Clip the flat surface against the same triangles that draw the riverbed.
-pub(super) fn build_tile(tile: IVec2, water: &[WaterVertex]) -> Option<Mesh> {
+pub(super) fn build_tile(grid: TerrainGrid, water: &[WaterVertex]) -> Option<Mesh> {
     if water.iter().all(|v| v.depth <= 0.0) {
         return None;
     }
-    let origin = tile.as_vec2() * TILE_SIZE;
+    let TerrainGrid {
+        origin,
+        spacing,
+        cells,
+    } = grid;
     let vertex = |x, z| Vertex {
-        at: origin + Vec2::new(x as f32, z as f32) * SPACING,
-        water: water[z * (CELLS + 1) + x],
+        at: origin + Vec2::new(x as f32, z as f32) * spacing,
+        water: water[z * (cells + 1) + x],
     };
     let mut positions = Vec::new();
     let mut colors = Vec::new();
-    for z in 0..CELLS {
-        for x in 0..CELLS {
+    for z in 0..cells {
+        for x in 0..cells {
             let (a, b, c, d) = (
                 vertex(x, z),
                 vertex(x + 1, z),
@@ -121,14 +125,13 @@ pub(super) fn build_tile(tile: IVec2, water: &[WaterVertex]) -> Option<Mesh> {
     )
 }
 
-pub(super) fn spawn(
-    world: &mut ChildSpawnerCommands,
+pub(super) fn surface(
     mesh: Handle<Mesh>,
     material: &Handle<WaterMaterial>,
-) {
-    world.spawn((
+) -> (Mesh3d, MeshMaterial3d<WaterMaterial>, NotShadowCaster) {
+    (
         Mesh3d(mesh),
         MeshMaterial3d(material.clone()),
         NotShadowCaster,
-    ));
+    )
 }

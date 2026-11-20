@@ -1,29 +1,94 @@
 use std::convert::Infallible;
 
+use bevy::light::NotShadowCaster;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 
 use crate::assets::PreloadedAssets;
+use crate::player::Player;
 
 use super::canopy::{self, CanopyModels};
-use super::scenery::{self, Scenery, Sites};
-use super::terrain::{TILE_RADIUS, Terrain};
+use super::detail_range;
+use super::scenery::{self, ForestBatch, Scenery, Sites};
+use super::terrain::{
+    HORIZON_TILE_RADIUS, SCENIC_TILE_RADIUS, TILE_RADIUS, TILE_SIZE, Terrain, TerrainGrid,
+};
 use super::terrain_material::TerrainMaterial;
 use super::water::{self, WaterMaterial};
 
 struct TerrainTile {
+    coord: IVec2,
     ground: Mesh,
+    playable: bool,
     water: Option<Mesh>,
     forest: Option<Mesh>,
     stone: Option<Mesh>,
 }
 
 struct TileMeshes {
+    coord: IVec2,
     ground: Handle<Mesh>,
+    playable: bool,
     water: Option<Handle<Mesh>>,
     forest: Option<Handle<Mesh>>,
     stone: Option<Handle<Mesh>>,
+}
+
+#[derive(Component)]
+pub(super) struct GroundLod {
+    coord: IVec2,
+    distant: Handle<Mesh>,
+    distant_water: Option<Handle<Mesh>>,
+    near: bool,
+    water: Option<Entity>,
+}
+
+fn tile_at(point: Vec2) -> IVec2 {
+    (point / TILE_SIZE).floor().as_ivec2()
+}
+
+pub(super) fn stream_ground_detail(
+    mut commands: Commands,
+    player: Single<(Entity, &Transform), With<Player>>,
+    terrain: Res<Terrain>,
+    materials: Res<super::LandscapeMaterials>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut last: Local<Option<(Entity, IVec2)>>,
+    mut tiles: Query<(Entity, &mut GroundLod, &mut Mesh3d)>,
+) {
+    let (player, position) = *player;
+    let center = tile_at(position.translation.xz());
+    if *last == Some((player, center)) {
+        return;
+    }
+    *last = Some((player, center));
+    for (entity, mut lod, mut mesh) in &mut tiles {
+        let near = (lod.coord - center).abs().max_element() <= 2;
+        if lod.near == near {
+            continue;
+        }
+        lod.near = near;
+        let water = if near {
+            let grid = TerrainGrid::detail(lod.coord);
+            let (detail, wet) = terrain.build_grid(grid);
+            mesh.0 = meshes.add(detail);
+            commands.entity(entity).remove::<NotShadowCaster>();
+            water::build_tile(grid, &wet).map(|surface| meshes.add(surface))
+        } else {
+            mesh.0 = lod.distant.clone();
+            commands.entity(entity).insert(NotShadowCaster);
+            lod.distant_water.clone()
+        };
+        if let Some(old) = lod.water.take() {
+            commands.entity(old).despawn();
+        }
+        lod.water = water.map(|mesh| {
+            commands
+                .spawn((water::surface(mesh, &materials.water), ChildOf(entity)))
+                .id()
+        });
+    }
 }
 
 #[derive(Asset, TypePath)]
@@ -46,17 +111,47 @@ pub(super) fn prepare_landscape(
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let mut sites = HashMap::default();
         let mut pending = Vec::new();
-        for z in -TILE_RADIUS..TILE_RADIUS {
-            for x in -TILE_RADIUS..TILE_RADIUS {
+        for z in -SCENIC_TILE_RADIUS..SCENIC_TILE_RADIUS {
+            for x in -SCENIC_TILE_RADIUS..SCENIC_TILE_RADIUS {
                 let tile = IVec2::new(x, z);
-                let (ground, wet) = terrain.build_tile(tile);
-                let (objects, forest, stone) = scenery::build_tile(&terrain, tile);
-                sites.insert(tile, objects);
+                let grid = TerrainGrid::distant(tile);
+                let (ground, wet) = terrain.build_grid(grid);
+                let in_playable_tiles = (-TILE_RADIUS..TILE_RADIUS).contains(&x)
+                    && (-TILE_RADIUS..TILE_RADIUS).contains(&z);
+                let (forest, stone) = if in_playable_tiles {
+                    let (objects, forest, stone) = scenery::build_tile(&terrain, tile);
+                    sites.insert(tile, objects);
+                    (forest, stone)
+                } else {
+                    (scenery::build_scenic_forest(&terrain, tile), None)
+                };
                 pending.push(TerrainTile {
+                    coord: tile,
                     ground,
-                    water: water::build_tile(tile, &wet),
+                    playable: in_playable_tiles,
+                    water: water::build_tile(grid, &wet),
                     forest,
                     stone,
+                });
+            }
+        }
+        // The large, low-resolution outer tiles reach past the camera's far plane.
+        let inner = SCENIC_TILE_RADIUS / 4;
+        for z in -HORIZON_TILE_RADIUS..HORIZON_TILE_RADIUS {
+            for x in -HORIZON_TILE_RADIUS..HORIZON_TILE_RADIUS {
+                if (-inner..inner).contains(&x) && (-inner..inner).contains(&z) {
+                    continue;
+                }
+                let tile = IVec2::new(x, z);
+                let grid = TerrainGrid::horizon(tile);
+                let (ground, wet) = terrain.build_grid(grid);
+                pending.push(TerrainTile {
+                    coord: tile,
+                    ground,
+                    playable: false,
+                    water: water::build_tile(grid, &wet),
+                    forest: None,
+                    stone: None,
                 });
             }
         }
@@ -75,7 +170,9 @@ impl Landscape {
     pub(super) fn upload(&mut self, meshes: &mut Assets<Mesh>) {
         for tile in self.pending.drain(..) {
             self.meshes.push(TileMeshes {
+                coord: tile.coord,
                 ground: meshes.add(tile.ground),
+                playable: tile.playable,
                 water: tile.water.map(|mesh| meshes.add(mesh)),
                 forest: tile.forest.map(|mesh| meshes.add(mesh)),
                 stone: tile.stone.map(|mesh| meshes.add(mesh)),
@@ -92,19 +189,58 @@ impl Landscape {
         canopies: &CanopyModels,
     ) {
         for tile in &self.meshes {
-            world.spawn((Mesh3d(tile.ground.clone()), MeshMaterial3d(terrain.clone())));
-            if let Some(mesh) = &tile.water {
-                water::spawn(world, mesh.clone(), water_surface);
-            }
-            for sites in self.sites.values() {
-                canopy::spawn_canopies(world, canopies, &sites.canopies);
+            if tile.playable {
+                let mut entity = world.spawn((
+                    Mesh3d(tile.ground.clone()),
+                    MeshMaterial3d(terrain.clone()),
+                    NotShadowCaster,
+                ));
+                let parent = entity.id();
+                let water = tile.water.clone().map(|mesh| {
+                    entity
+                        .commands()
+                        .spawn((water::surface(mesh, water_surface), ChildOf(parent)))
+                        .id()
+                });
+                entity.insert(GroundLod {
+                    coord: tile.coord,
+                    distant: tile.ground.clone(),
+                    distant_water: tile.water.clone(),
+                    near: false,
+                    water,
+                });
+            } else {
+                world.spawn((
+                    Mesh3d(tile.ground.clone()),
+                    MeshMaterial3d(terrain.clone()),
+                    NotShadowCaster,
+                ));
+                if let Some(mesh) = &tile.water {
+                    world.spawn(water::surface(mesh.clone(), water_surface));
+                }
             }
             if let Some(mesh) = &tile.forest {
-                world.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(foliage.clone())));
+                let mut forest = world.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(foliage.clone()),
+                    ForestBatch(tile.coord),
+                ));
+                if tile.playable {
+                    forest.insert(detail_range(310.0, 60.0));
+                } else {
+                    forest.insert((detail_range(440.0, 80.0), NotShadowCaster));
+                }
             }
             if let Some(mesh) = &tile.stone {
-                world.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(terrain.clone())));
+                world.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(terrain.clone()),
+                    detail_range(290.0, 0.0),
+                ));
             }
+        }
+        for sites in self.sites.values() {
+            canopy::spawn_canopies(world, canopies, &sites.canopies);
         }
     }
 
@@ -115,5 +251,115 @@ impl Landscape {
             active: HashMap::default(),
             center: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::canopy::{CanopyVisual, ForestTree, Species};
+
+    #[test]
+    fn ground_detail_follows_the_player_into_the_new_land() {
+        let mut app = App::new();
+        app.insert_resource(Terrain::new())
+            .insert_resource(super::super::LandscapeMaterials {
+                terrain: Handle::default(),
+                water: Handle::default(),
+                foliage: Handle::default(),
+            })
+            .init_resource::<Assets<Mesh>>()
+            .add_systems(Update, stream_ground_detail);
+        let world = app.world_mut();
+        let distant = world.resource_mut::<Assets<Mesh>>().add(Cuboid::default());
+        let tile = world
+            .spawn((
+                Mesh3d(distant.clone()),
+                GroundLod {
+                    coord: IVec2::new(12, -9),
+                    distant: distant.clone(),
+                    distant_water: None,
+                    near: false,
+                    water: None,
+                },
+            ))
+            .id();
+        let player = world.spawn((Player::default(), Transform::IDENTITY)).id();
+        let mesh = |app: &App| {
+            app.world()
+                .get::<Mesh3d>(tile)
+                .expect("a ground tile")
+                .0
+                .clone()
+        };
+        app.update();
+        assert_eq!(mesh(&app), distant);
+        let mut at = app
+            .world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player spawn");
+        at.translation = Vec3::new(12.5 * TILE_SIZE, 0.0, -8.5 * TILE_SIZE);
+        app.update();
+        let close = mesh(&app);
+        assert_ne!(close, distant);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&close)
+                .expect("nearby mesh")
+                .count_vertices(),
+            (super::super::terrain::CELLS + 1).pow(2)
+        );
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player spawn")
+            .translation = Vec3::ZERO;
+        app.update();
+        assert_eq!(mesh(&app), distant);
+    }
+
+    #[test]
+    fn a_canopy_has_only_one_visual_in_a_multi_chunk_landscape() {
+        let tile = IVec2::ZERO;
+        let landscape = Landscape {
+            sites: [(
+                tile,
+                Sites {
+                    solids: vec![],
+                    canopies: vec![ForestTree {
+                        species: Species::Birch,
+                        pose: Transform::IDENTITY,
+                    }],
+                    undergrowth: vec![],
+                    plants: vec![],
+                },
+            )]
+            .into_iter()
+            .collect(),
+            meshes: [tile, IVec2::X]
+                .map(|coord| TileMeshes {
+                    coord,
+                    ground: Handle::default(),
+                    playable: false,
+                    water: None,
+                    forest: None,
+                    stone: None,
+                })
+                .into(),
+            pending: vec![],
+        };
+        let mut world = World::new();
+        let root = world.spawn(Transform::IDENTITY).id();
+        world.commands().entity(root).with_children(|objects| {
+            landscape.spawn(
+                objects,
+                &Handle::default(),
+                &Handle::default(),
+                &Handle::default(),
+                &CanopyModels::default(),
+            );
+        });
+        world.flush();
+        assert_eq!(world.query::<&CanopyVisual>().iter(&world).count(), 1);
     }
 }

@@ -22,6 +22,8 @@ who risk their lives to enter it and smuggle artifacts out.
 
 Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dread.
 
+The upper-right in-game HUD shows the smoothed frame rate.
+
 ## Controls
 
 - **Any key** — enter the Zone from the hangar splash once loading finishes
@@ -36,11 +38,16 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 
 ## Procedural content
 
-- **Terrain** (`src/world/terrain.rs`) is a deterministic 1.536 km square built in
+- **Terrain** (`src/world/terrain.rs`) is a deterministic 3.44 km square built in
   128 m chunks: mountains, rolling hills, the old quarry and bald hill, and dirt tracks
   from the hangar to the quarry and the main river ford. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
-  in other plugins. `tools/prepare_terrain_textures.py` extracts tiling albedo,
+  in other plugins. `Terrain::mesh_height_at` tracks the rendered surface near
+  the player. Ground tiles swap from 2 m to 8 m sampling at distance, with
+  stitched edges across both resolutions. Larger 16 m horizon tiles keep the
+  coastal water, lake basin and rolling country visible beyond the traversal
+  limit without nearby collision or plant detail.
+  `tools/prepare_terrain_textures.py` extracts tiling albedo,
   normal, and packed AO/roughness/height maps from `terrain_texture_image_2.webp`
   (moss) and `terrain_texture_1.webp` (bare ground). The shader blends irregular
   patches over the terrain masks, uses the heights for shallow parallax, and adds
@@ -50,14 +57,20 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   between drier hummocks. Use `Terrain::water_depth_at` for traversal. Walk and
   drive through the shallows; deep water stops you. The main dirt track crosses
   at a vehicle-depth ford.
-- **Scenery** (`src/world/scenery.rs`): dense, deterministic pine groves and
-  textured rock outcrops are drawn in chunk batches. Some pine sites instead use
-  the textured sapling, broadleaf, or very tall conifer in `assets/models/trees/`.
-  Their shared meshes, distance fades, root footprints, and trunks are configured
-  in `src/world/canopy.rs`. Rebuild them with glTF Transform `simplify --ratio
-  0.003 --error 0.007`, `resize --width 1024 --height 1024`, and `tangents` (all
-  with `--vertex-layout separate`), then `tools/prepare_plant_asset.py`.
-  Colliders and detailed undergrowth stream in a 3×3 chunk neighborhood.
+- **Scenery** (`src/world/scenery.rs`): deterministic pine groves and
+  textured rock outcrops are drawn in chunk batches. The sapling, broadleaf,
+  tall conifer, birch, and dead tree in `assets/models/trees/` also grow around
+  the hangar. Their GLBs use one ~500-triangle primitive each: simplified
+  textured wood and, for living trees, cutout crown faces baked from the
+  supplied models.
+  `src/world/canopy.rs` fits the roots and trunks, limits
+  shadows to nearby trees, and sways some living trees without moving their
+  colliders. Individual trees can randomly snap and fall while in view; their
+  collision goes away immediately and they don't respawn during the run.
+  Individual trees and dead-tree stands use one quarter of their original
+  density. Colliders and undergrowth stream in a 3×3 chunk neighborhood.
+  Camera frusta and distance ranges cull scenery detail independently of
+  collision and leave the terrain skyline visible.
 - **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
   shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
   The five shared GLBs live in `assets/models/plants/`; regenerate them with
@@ -66,7 +79,9 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   and `tangents` (all with `--vertex-layout separate`), then
   `tools/prepare_plant_asset.py`.
   The script grounds roots, bakes the glowweed mask, and removes the thornbush's
-  detached display plaque. Only the two woody bushes have collision.
+  detached display plaque. Five staggered scatter layers grow all five types
+  at roughly five times their base density, with additional beds around the
+  hangar. Plants don't block movement; only original-layer hogweed casts shadows.
 - **Fauna** (`src/world/trees.rs`): four extracted, textured models
   (`assets/models/fauna/*.glb`) are scattered deterministically on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
@@ -81,6 +96,18 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   each extracted cluster is centered with its lowest point at ground level.
   Regenerate each collision pillar file with `tools/trim_tree_base.py` whenever
   the source geometry changes.
+- **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
+  textured sources in `assets/models/{animals,birds}/` share mesh handles
+  and preserve the original PBR maps. Rebuild with glTF Transform `simplify
+  --ratio 0.0015 --error 0.009`, `resize --width 1024 --height 1024`, and
+  `tangents` (all with `--vertex-layout separate`), then ground and repair
+  tangent seams with `tools/prepare_plant_asset.py`.
+  `src/world/wildlife/rig.rs` skins the static meshes with shared per-species
+  rig weights measured in +Z-forward model space. Walking and running feet
+  follow the terrain, and flyers flap or glide. Near the hangar, the raven
+  lands, walks, and takes off again while the frostwolf occasionally chases
+  and lunges at the hexadeer. The chameleon stays on its modeled perch.
+  Wildlife is decorative and has no collision.
 - **Base** (`src/world/base.rs`): the imported steel hangar
   (`assets/models/base/hangar.glb`) sits on a levelled pad at `terrain::BASE`.
   The north (+Z) door stays open for the vehicle, and runs and respawns start at
@@ -92,6 +119,7 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   probe and warm pendants keep the interior dim without changing outdoor lighting.
   The workshop and tool rack, jack, map board, lab bench, table, and toilet
   use the hangar-local poses and collision in `src/world/base/props.rs`.
+  Each prop also has a short-range warm spotlight without a shadow map.
   Rebuild their GLBs in `assets/models/base/props/` with glTF Transform `simplify
   --ratio 0.012 --error 0.0035`, `resize --width 1024 --height 1024`, and
   `tangents` (all with `--vertex-layout separate`), then ground them and repair
@@ -100,10 +128,16 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
   The chassis and suspension sample the rendered terrain under the wheels.
+  Throttle and steering ease in, steering gets gentler at speed, and the chase
+  camera damps vehicle movement and zoom without delaying mouse orbit.
+  When throttle is held while blocked, the tires spin without moving the hull.
   Slopes beyond tire grip cause downhill sliding; the car and stalker fall at 9.81 m/s².
-  `tools/prepare_vehicle_asset.py` rebuilds the GLB with
-  UVs and embedded material maps from four reference sheets. Regenerate
-  `src/world/pillars/armored_vehicle.rs` with `tools/trim_tree_base.py` after mesh changes.
+  `tools/prepare_vehicle_asset.py` bakes the GLB's 3072 × 2048 PBR atlases from
+  four texture sheets, with matte paint, dark trim, louver and lamp details,
+  and subtle procedural wear.
+  The vehicle uses mipmaps and anisotropic filtering to keep angled armor sharp.
+  Regenerate `src/world/pillars/armored_vehicle.rs` with `tools/trim_tree_base.py`
+  after mesh changes.
 - **Collision** (`src/world/collision.rs`): every solid model carries a `Collider`, a
   set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
   of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed

@@ -9,23 +9,28 @@ mod plants;
 mod scenery;
 mod terrain;
 mod terrain_material;
+mod tree_fall;
 mod trees;
 mod water;
+mod wildlife;
 
 pub(crate) use collision::STEP_HEIGHT;
 pub use collision::{Body, Collider, Pillar, push_out};
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::{Atmosphere, SunDisk, light_consts::lux};
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
+use bevy::world_serialization::WorldInstanceReady;
 
-use crate::states::AppState;
+use crate::states::{AppState, InGamePhase};
 
 use canopy::CanopyModels;
-use landscape::{Landscape, LandscapeSource, prepare_landscape};
+use landscape::{Landscape, LandscapeSource, prepare_landscape, stream_ground_detail};
 use scenery::{Scenery, stream_scenery};
-use terrain_material::{TerrainMaterial, load_terrain_material, mipmap_tiling_textures};
+use terrain_material::{TerrainMaterial, load_terrain_material, mipmap_filtered_textures};
 use water::WaterMaterial;
 
 /// Direction toward the sun: late afternoon, ahead of the stalker's start.
@@ -61,6 +66,7 @@ impl Plugin for WorldPlugin {
         ))
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()
+        .add_message::<tree_fall::TreeBreak>()
         .add_systems(
             Startup,
             (
@@ -68,6 +74,7 @@ impl Plugin for WorldPlugin {
                 load_landscape_materials,
                 canopy::preload_canopies,
                 plants::preload_plants,
+                wildlife::preload_wildlife,
             ),
         )
         .add_systems(
@@ -77,11 +84,60 @@ impl Plugin for WorldPlugin {
                 spawn_sky,
                 base::spawn_base,
                 plants::prepare_plant_materials,
+                tree_fall::start_break_clock,
+                wildlife::spawn_wildlife,
             ),
         )
-        .add_systems(Update, mipmap_tiling_textures)
-        .add_systems(PreUpdate, stream_scenery.run_if(in_state(AppState::InGame)))
+        .add_systems(Update, mipmap_filtered_textures)
+        .add_systems(
+            PreUpdate,
+            (stream_scenery, stream_ground_detail).run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            PostUpdate,
+            (wildlife::move_wildlife, wildlife::pose_wildlife)
+                .chain()
+                .before(TransformSystems::Propagate)
+                .run_if(in_state(InGamePhase::Running)),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                tree_fall::animate_falling_trees,
+                tree_fall::pick_tree_to_break,
+                tree_fall::break_selected_trees,
+                canopy::update_canopy_motion,
+            )
+                .chain()
+                .before(TransformSystems::Propagate)
+                .run_if(in_state(InGamePhase::Running)),
+        )
         .add_systems(OnExit(AppState::InGame), despawn_world);
+    }
+}
+
+fn detail_range(distance: f32, fade: f32) -> VisibilityRange {
+    VisibilityRange {
+        end_margin: distance..distance + fade,
+        use_aabb: true,
+        ..default()
+    }
+}
+
+fn range_scene_meshes(
+    ready: On<WorldInstanceReady>,
+    roots: Query<&VisibilityRange>,
+    children: Query<&Children>,
+    meshes: Query<(), With<Mesh3d>>,
+    mut commands: Commands,
+) {
+    let Ok(range) = roots.get(ready.entity) else {
+        return;
+    };
+    for child in children.iter_descendants(ready.entity) {
+        if meshes.contains(child) {
+            commands.entity(child).insert(range.clone());
+        }
     }
 }
 
@@ -158,4 +214,59 @@ fn despawn_world(mut commands: Commands, roots: Query<Entity, With<WorldRoot>>) 
         commands.entity(root).despawn();
     }
     commands.remove_resource::<Scenery>();
+    commands.remove_resource::<tree_fall::TreeBreakClock>();
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::asset::AssetPlugin;
+    use bevy::camera::CameraPlugin;
+    use bevy::mesh::MeshPlugin;
+
+    use super::*;
+
+    #[test]
+    fn distant_detail_and_objects_behind_the_camera_are_culled() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            MeshPlugin,
+            CameraPlugin,
+        ));
+        let world = app.world_mut();
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(Cuboid::default());
+        let camera = world.spawn((Camera3d::default(), Transform::IDENTITY)).id();
+        let mut prop = |z| {
+            world
+                .spawn((
+                    Mesh3d(mesh.clone()),
+                    Transform::from_xyz(0.0, 0.0, z),
+                    detail_range(100.0, 15.0),
+                ))
+                .id()
+        };
+        let front = prop(-14.0);
+        let behind = prop(14.0);
+        let distant = prop(-175.0);
+        let visible = |world: &World, entity| {
+            world
+                .get::<ViewVisibility>(entity)
+                .expect("mesh visibility")
+                .get()
+        };
+        app.update();
+        assert!(visible(app.world(), front));
+        assert!(!visible(app.world(), behind));
+        assert!(!visible(app.world(), distant));
+
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("camera")
+            .rotation = Quat::from_rotation_y(std::f32::consts::PI);
+        app.update();
+        assert!(!visible(app.world(), front));
+        assert!(visible(app.world(), behind));
+    }
 }

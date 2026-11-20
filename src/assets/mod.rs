@@ -7,7 +7,7 @@
 //! the project's forward-looking contract for asset locations. When a module
 //! starts using one, the compiler will demand the attribute be removed.
 
-use bevy::gltf::GltfMaterial;
+use bevy::gltf::{GltfLoaderSettings, GltfMaterial};
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::shader::Shader;
@@ -34,6 +34,17 @@ pub const THORNBUSH: &str = "models/plants/thornbush.glb";
 pub const TREE_SMALL: &str = "models/trees/tree_small.glb";
 pub const TREE_BIG: &str = "models/trees/tree_big.glb";
 pub const TREE_VERY_TALL: &str = "models/trees/tree_veryhigh.glb";
+pub const TREE_BIRCH: &str = "models/trees/tree_birch.glb";
+pub const TREE_DEAD: &str = "models/trees/tree_dead.glb";
+pub const FROSTWOLF: &str = "models/animals/frostwolf.glb";
+pub const HEXADEER: &str = "models/animals/hexadeer.glb";
+pub const SKYGLIDER: &str = "models/animals/skyglider.glb";
+pub const VENOM_CHAMELEON: &str = "models/animals/venomchameleon.glb";
+pub const HAWK: &str = "models/birds/hawk.glb";
+pub const HERON: &str = "models/birds/heron.glb";
+pub const OWL: &str = "models/birds/owl.glb";
+pub const RAVEN: &str = "models/birds/raven.glb";
+pub const SPARROW: &str = "models/birds/sparrow.glb";
 pub const BASE_HANGAR: &str = "models/base/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
 pub const HANGAR_LAB: &str = "models/base/props/lab.glb";
@@ -63,7 +74,6 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     let scenes = [
         STALKER_MODEL,
         BASE_HANGAR,
-        BASE_VEHICLE,
         FAUNA_DEAD_FOREST,
         FAUNA_OVERGROWTH,
         FAUNA_MUD_BOG,
@@ -88,6 +98,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
             .untyped()
     }));
+    assets.0.push(load_vehicle_scene(&server).untyped());
     assets
         .0
         .extend(albedo.map(|path| load_repeating(&server, path, true).untyped()));
@@ -99,6 +110,18 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         server.load::<Shader>(TERRAIN_SHADER).untyped(),
         server.load::<Shader>(WATER_SHADER).untyped(),
     ]);
+}
+
+pub(crate) fn load_vehicle_scene(server: &AssetServer) -> Handle<WorldAsset> {
+    server
+        .load_builder()
+        .with_settings(|settings: &mut GltfLoaderSettings| {
+            settings.default_sampler = Some(ImageSamplerDescriptor {
+                anisotropy_clamp: 8,
+                ..ImageSamplerDescriptor::linear()
+            });
+        })
+        .load(GltfAssetLabel::Scene(0).from_asset(BASE_VEHICLE))
 }
 
 /// Loads the shared mesh and material of a single-primitive GLB.

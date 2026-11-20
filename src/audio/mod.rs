@@ -261,7 +261,7 @@ fn sync_engine(
     let running = *phase.get() == InGamePhase::Running;
     match (car, engine.single_mut().ok()) {
         (Some(car), Some((_, Some(mut sink)))) => {
-            let load = (car.speed().abs() / 10.0).clamp(0.0, 1.0);
+            let load = car.engine_load();
             sink.set_speed(0.82 + load * 0.95);
             sink.set_volume(Volume::Linear(0.30 + load * 0.45));
             if running { sink.play() } else { sink.pause() }

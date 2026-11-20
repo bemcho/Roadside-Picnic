@@ -1,4 +1,4 @@
-"""Reproject the reference swatches and split the four wheel pivots.
+"""Bake detailed vehicle PBR maps from the reference boards and split the wheel pivots.
 
 blender -b --python tools/prepare_vehicle_asset.py -- source.glb out.glb \
   textture_vehicle.png 'image_3 (1).png' 'image_2 (1).png' 'image_1 (1).png'
@@ -16,7 +16,7 @@ SOURCE, OUTPUT, *BOARDS = sys.argv[sys.argv.index("--") + 1 :]
 if len(BOARDS) != 4:
     raise ValueError("Expected the primary texture sheet, then image_3, image_2, and image_1")
 
-SIZE, PAD = 256, 4
+SIZE, PAD = 1024, 16
 PLAIN, SIDE, FRONT, REAR, WHEEL, TREAD = range(6)
 VIEWS = {SIDE: (-150, 30, 850, 540), FRONT: (60, 30, 640, 540), REAR: (60, 30, 640, 540)}
 
@@ -28,12 +28,24 @@ GLASS = ((0, 16, 761, 104, 794), (0, 272, 761, 360, 794), (0, 528, 761, 616, 794
          0.05, 0.95)
 GRILLE = ((2, 102, 351, 191, 379), (2, 443, 351, 532, 379), (2, 785, 351, 874, 379),
           0.55, 0.75)
+LOUVERS = ((1, 181, 227, 227, 283), (1, 693, 227, 739, 283), (1, 181, 566, 227, 622),
+           0.10, 0.86)
 HEADLIGHT = ((1, 316, 284, 338, 302), (128, 128, 255), 0.3, 0.05, 1.0)
 TAIL_LIGHT = ((1, 520, 853, 540, 881), (128, 128, 255), 0.31, 0.04, 1.0)
 WHEEL_FACE = ((3, 10, 597, 181, 769), (3, 266, 597, 437, 769), (3, 522, 597, 693, 769),
               0.16, 0.92)
-RUBBER = ((0, 143, 527, 164, 704), (0, 399, 527, 420, 704), (0, 655, 527, 676, 704),
+RUBBER = ((3, 181, 604, 246, 812), (3, 437, 604, 502, 812), (3, 693, 604, 758, 812),
           0.0, 1.0)
+
+
+def solid(color, roughness):
+    return color, (128, 128, 255), roughness, 0.0, 1.0
+
+
+TRIM = solid((29, 31, 32), 0.68)
+BUMPER = solid((61, 64, 67), 0.76)
+HATCH = solid((76, 80, 84), 0.61)
+AMBER = solid((194, 109, 39), 0.32)
 
 
 def load_board(path):
@@ -70,7 +82,8 @@ def paint(tile, swatch, boards, points=None):
         y = np.linspace(top, bottom - 1, height)
         # Bilinear resampling keeps enlarged thumbnail crops from pixelating.
         xi, yi = x.astype(int), y.astype(int)
-        dx, dy = (x - xi)[None, :, None], (y - yi)[:, None, None]
+        dx = (x - xi).astype(np.float32)[None, :, None]
+        dy = (y - yi).astype(np.float32)[:, None, None]
         src = boards[board]
         a = src[yi[:, None], xi] * (1 - dx) + src[yi[:, None], xi + 1] * dx
         b = src[(yi + 1)[:, None], xi] * (1 - dx) + src[(yi + 1)[:, None], xi + 1] * dx
@@ -93,6 +106,53 @@ def paint(tile, swatch, boards, points=None):
         surface[rows, cols][mask] = np.broadcast_to(values, (height, width, 3))[mask]
 
 
+def noise(rng, size, cells):
+    lattice = rng.uniform(-1, 1, (cells + 1, cells + 1)).astype(np.float32)
+    uv = np.linspace(0, cells, size, endpoint=False, dtype=np.float32)
+    i = uv.astype(int)
+    t = uv - i
+    t = (t * t * (3 - 2 * t)).astype(np.float32)
+    rows = lattice[i] * (1 - t[:, None]) + lattice[i + 1] * t[:, None]
+    return rows[:, i] * (1 - t) + rows[:, i + 1] * t
+
+
+def weather_armor(tile, view):
+    albedo, normal, arm = tile
+    size = albedo.shape[0]
+    rng = np.random.default_rng(42 + view)
+    mottling = noise(rng, size, 22)
+    grain = noise(rng, size, 190)
+    pores = noise(rng, size, 395)
+    scratches = np.zeros_like(grain)
+    for _ in range(80):
+        x, y = rng.integers(30, size - 60, 2)
+        length = rng.integers(6, 48)
+        tilt = rng.uniform(-0.25, 0.32)
+        xx, yy = np.arange(length)[None, :], np.arange(-16, 17)[:, None]
+        width = rng.uniform(0.65, 1.8)
+        stroke = np.clip(1 - np.abs(yy - tilt * xx) / width, 0, 1)
+        stroke *= np.sin(np.pi * (xx + 0.5) / length) * rng.uniform(0.28, 1.0)
+        area = scratches[y - 16:y + 17, x:x + length]
+        np.maximum(area, stroke, out=area)
+
+    albedo *= (1 + 0.060 * mottling + 0.035 * grain + 0.015 * pores)[:, :, None]
+    albedo += 0.036 * scratches[:, :, None]
+    if view != PLAIN:
+        height = np.linspace(0, 1, size, dtype=np.float32)[:, None]
+        dust = np.clip((height - 0.58) * 3 + 0.18 * mottling, 0, 1) * (0.10 + 0.05 * grain)
+        albedo += dust[:, :, None] * (np.array((0.42, 0.35, 0.29), dtype=np.float32) - albedo)
+        arm[:, :, 1] += 0.25 * dust
+
+    arm[:, :, 1] += 0.028 * mottling + 0.020 * grain - 0.13 * scratches
+    arm[:, :, 2] += 0.20 * scratches
+    # Height slopes use +Y up in the normal map, opposite the image rows.
+    dy, dx = np.gradient(0.09 * grain + 0.035 * pores - 0.15 * scratches)
+    tangent = normal * 2 - 1
+    tangent[:, :, 0] -= dx
+    tangent[:, :, 1] += dy
+    normal[:] = 0.5 + 0.5 * tangent / np.linalg.norm(tangent, axis=-1, keepdims=True)
+
+
 def box(left, top, right, bottom):
     return ((left, top), (right, top), (right, bottom), (left, bottom))
 
@@ -102,12 +162,20 @@ def circle(x, y, radius):
             for angle in np.linspace(0, math.tau, 24, endpoint=False)]
 
 
+def trace(points, width):
+    for (x1, y1), (x2, y2) in zip(points, points[1:]):
+        scale = width / (2 * math.hypot(x2 - x1, y2 - y1))
+        dx, dy = (y1 - y2) * scale, (x2 - x1) * scale
+        yield ((x1 + dx, y1 + dy), (x2 + dx, y2 + dy), (x2 - dx, y2 - dy), (x1 - dx, y1 - dy))
+
+
 def make_atlas():
     boards = [load_board(path) for path in BOARDS]
     inner = SIZE - 2 * PAD
     tiles = np.empty((6, 3, inner, inner, 3), dtype=np.float32)
     for tile in (PLAIN, SIDE, FRONT, REAR):
         paint(tiles[tile], ARMOR, boards)
+        tiles[tile, 0] += (0.065, 0.071, 0.078)
     paint(tiles[WHEEL], WHEEL_FACE, boards)
     paint(tiles[TREAD], RUBBER, boards)
 
@@ -117,7 +185,22 @@ def make_atlas():
                      for x, y in points]
         paint(tiles[view], swatch, boards, projected)
 
-    # Outline the recessed panes and lamps in orthographic views of this mesh.
+    detail(SIDE, BUMPER, box(188, 351, 520, 365))
+    for seam in (
+        ((188, 238), (193, 288), (202, 319), (290, 319), (320, 278), (327, 233)),
+        ((365, 233), (371, 297), (379, 319), (478, 319), (505, 283), (511, 233)),
+    ):
+        for segment in trace(seam, 1.8):
+            detail(SIDE, BUMPER, segment)
+    detail(FRONT, BUMPER, ((94, 313), (241, 327), (461, 327), (596, 313),
+                           (473, 380), (227, 380)))
+    detail(REAR, BUMPER, ((107, 346), (595, 346), (473, 391), (227, 391)))
+    detail(REAR, TRIM, box(237, 241, 462, 336))
+    detail(REAR, HATCH, box(240, 244, 459, 333))
+    for view in (PLAIN, SIDE, FRONT, REAR):
+        weather_armor(tiles[view], view)
+
+    # Match the orthographic projections to the modeled panel recesses.
     for view, windows in (
         (SIDE, [((225, 185), (253, 155), (326, 155), (331, 220), (225, 220)),
                 ((376, 150), (494, 150), (501, 220), (375, 220))]),
@@ -128,14 +211,36 @@ def make_atlas():
                 ((473, 148), (505, 150), (527, 211), (470, 211))]),
     ):
         for pane in windows:
+            cx, cy = np.mean(pane, axis=0)
+            detail(view, TRIM, [(cx + (x - cx) * 1.09, cy + (y - cy) * 1.09) for x, y in pane])
             detail(view, GLASS, pane)
-    detail(FRONT, GRILLE, box(249, 265, 451, 320))
+    detail(SIDE, TRIM, ((524, 135), (593, 135), (610, 205), (524, 205)))
+    detail(SIDE, LOUVERS, ((529, 140), (589, 140), (603, 200), (529, 200)))
+    detail(SIDE, TRIM, box(434, 374, 492, 432))
+    detail(SIDE, LOUVERS, box(438, 378, 488, 428))
+    detail(SIDE, AMBER, box(355, 385, 369, 396))
+    detail(SIDE, AMBER, box(-87, 259, -69, 270))
+    detail(FRONT, TRIM, box(240, 255, 460, 324))
+    detail(FRONT, GRILLE, box(248, 261, 452, 319))
     for x in (198, 503):
-        detail(FRONT, HEADLIGHT, circle(x, 282, 20))
+        detail(FRONT, TRIM, box(x - 25, 253, x + 25, 307))
+        detail(FRONT, HEADLIGHT, circle(x, 281, 19))
+        marker = x + (-34 if x < 350 else 34)
+        detail(FRONT, AMBER, box(marker - 6, 266, marker + 6, 281))
     for left in (184, 485):
-        detail(REAR, TAIL_LIGHT, box(left, 274, left + 31, 315))
-    padded = np.pad(tiles, ((0, 0), (0, 0), (PAD, PAD), (PAD, PAD), (0, 0)), mode="edge")
-    return padded.reshape(2, 3, 3, SIZE, SIZE, 3).transpose(2, 0, 3, 1, 4, 5).reshape(3, 2 * SIZE, 3 * SIZE, 3)
+        detail(REAR, TRIM, box(left - 4, 268, left + 35, 319))
+        detail(REAR, AMBER, box(left, 272, left + 31, 287))
+        detail(REAR, TAIL_LIGHT, box(left, 290, left + 31, 314))
+    detail(REAR, TRIM, box(308, 253, 392, 260))
+    for left in (251, 404):
+        detail(REAR, TAIL_LIGHT, box(left, 355, left + 43, 369))
+    atlas = np.empty((3, 2 * SIZE, 3 * SIZE, 3), dtype=np.float32)
+    for index, tile in enumerate(tiles):
+        x, y = index % 3 * SIZE, index // 3 * SIZE
+        atlas[:, y:y + SIZE, x:x + SIZE] = np.pad(
+            tile, ((0, 0), (PAD, PAD), (PAD, PAD), (0, 0)), mode="edge"
+        )
+    return atlas
 
 
 def vehicle_material(atlas, directory):
@@ -150,7 +255,7 @@ def vehicle_material(atlas, directory):
         h, w, _ = pixels.shape
         rgba = np.ones((h, w, 4), dtype=np.float32)
         rgba[:, :, :3] = pixels[::-1]
-        image = bpy.data.images.new(name, width=w, height=h)
+        image = bpy.data.images.new(name, width=w, height=h, alpha=False)
         image.pixels.foreach_set(rgba.ravel())
         path = str(Path(directory) / f"armored_vehicle_{name}.png")
         image.filepath_raw = path
@@ -166,7 +271,6 @@ def vehicle_material(atlas, directory):
 
     links.new(color.outputs["Color"], surface.inputs["Base Color"])
     normal_map = nodes.new("ShaderNodeNormalMap")
-    normal_map.inputs["Strength"].default_value = 0.45
     links.new(normal.outputs["Color"], normal_map.inputs["Color"])
     links.new(normal_map.outputs["Normal"], surface.inputs["Normal"])
     channels = nodes.new("ShaderNodeSeparateColor")

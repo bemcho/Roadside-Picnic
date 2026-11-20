@@ -11,10 +11,20 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets;
 use crate::world::{Collider, Pillar, STEP_HEIGHT, TERRAIN_HALF_SIZE, Terrain, push_out};
 
-use super::{GRAVITY, Locomotion, Player, STANDING, camera::OrbitCamera, freefall};
+use super::{GRAVITY, Locomotion, Player, STANDING, camera::OrbitCamera, freefall, response};
 
 const MODEL_SCALE: f32 = 5.2;
 const WHEEL_RADIUS: f32 = 0.1008 * MODEL_SCALE;
+const BLOCKED_WHEEL_SPEED: f32 = 3.6;
+const DRIVE_ACCELERATION: f32 = 6.0;
+const MAX_STEER: f32 = 0.48;
+const FAST_STEER: f32 = 0.27;
+const LOW_RANGE_SPEED: f32 = 10.0;
+const FORWARD_SPEED: f32 = 16.0;
+const REVERSE_SPEED: f32 = 4.0;
+const WHEELBASE: f32 = 2.8;
+const DRIVE_STEP: f32 = 0.025;
+const MAX_STEP_TRAVEL: f32 = 0.25;
 const HALF_EXTENTS: Vec2 = Vec2::new(0.283 * MODEL_SCALE, 0.5 * MODEL_SCALE);
 const HULL_HEIGHT: f32 = 0.47 * MODEL_SCALE;
 const GROUND_CLEARANCE: f32 = 0.035;
@@ -29,6 +39,7 @@ const COLLISION: &[Pillar] = include!("../world/pillars/armored_vehicle.rs");
 #[derive(Component)]
 pub(crate) struct Vehicle {
     speed: f32,
+    throttle: f32,
     roll: f32,
     steer: f32,
     slide: Vec2,
@@ -41,6 +52,7 @@ impl Default for Vehicle {
     fn default() -> Self {
         Self {
             speed: 0.0,
+            throttle: 0.0,
             roll: 0.0,
             steer: 0.0,
             slide: Vec2::ZERO,
@@ -83,12 +95,18 @@ pub(crate) fn parked_vehicle(floor: Vec3) -> Transform {
 }
 
 impl Vehicle {
-    pub(crate) fn speed(&self) -> f32 {
-        self.speed
+    pub(crate) fn engine_load(&self) -> f32 {
+        let scale = if self.speed < 0.0 {
+            LOW_RANGE_SPEED
+        } else {
+            FORWARD_SPEED
+        };
+        (self.speed.abs() / scale).min(1.0)
     }
 
     pub(super) fn park(&mut self) {
         self.speed = 0.0;
+        self.throttle = 0.0;
         self.steer = 0.0;
     }
 }
@@ -104,7 +122,7 @@ pub(crate) fn spawn_vehicle(
         Vehicle::default(),
         Collider(COLLISION),
         transform.with_scale(Vec3::splat(MODEL_SCALE)),
-        WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(assets::BASE_VEHICLE))),
+        WorldAssetRoot(assets::load_vehicle_scene(assets)),
     ));
     vehicle.observe(attach_wheels);
     mount_spotlight(&mut vehicle, meshes, materials);
@@ -245,6 +263,9 @@ pub(super) fn interact_vehicle(
             *locomotion = grounded_idle();
             *visibility = Visibility::Inherited;
             commands.entity(player).remove::<Driving>();
+            if let Ok(mut orbit) = cameras.single_mut() {
+                orbit.cancel_assist();
+            }
         }
     } else if let Some((entity, _, at)) = vehicles
         .iter()
@@ -258,7 +279,7 @@ pub(super) fn interact_vehicle(
         commands.entity(player).insert(Driving(entity));
         if let Ok(mut orbit) = cameras.single_mut() {
             let forward = at.rotation * FORWARD;
-            orbit.yaw = (-forward.x).atan2(-forward.z);
+            orbit.face_vehicle(forward);
         }
     }
 }
@@ -283,7 +304,7 @@ fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool
     .find_map(|edge| {
         let sample = |reach: f32| {
             let mut point = at.translation + heading * (edge + edge.normalize() * reach);
-            point.y = terrain.height_at(point.x, point.z);
+            point.y = terrain.mesh_height_at(point.xz());
             point
         };
         let exit = sample(0.9);
@@ -307,7 +328,6 @@ pub(super) fn drive_vehicle(
 ) {
     let mut driver = players.single_mut().ok();
     let dt = time.delta_secs();
-    let steps = (dt / 0.025).ceil() as u32;
     for (entity, mut vehicle, mut at) in &mut vehicles {
         let occupied = driver
             .as_ref()
@@ -325,6 +345,10 @@ pub(super) fn drive_vehicle(
                 0.0
             },
         };
+        // Bound travel per sweep even at the higher top speed and when sliding.
+        let predicted_speed =
+            vehicle.speed.abs() + vehicle.slide.length() + (DRIVE_ACCELERATION + GRAVITY) * dt;
+        let steps = (dt * (1.0 / DRIVE_STEP).max(predicted_speed / MAX_STEP_TRAVEL)).ceil() as u32;
         let mut turned = 0.0;
         for _ in 0..steps {
             turned += drive_step(
@@ -339,7 +363,7 @@ pub(super) fn drive_vehicle(
         if occupied && let Some((_, player)) = &mut driver {
             player.translation = at.translation;
             if let Ok(mut orbit) = cameras.single_mut() {
-                orbit.yaw += turned;
+                orbit.record_turn(turned);
             }
         }
     }
@@ -377,7 +401,7 @@ fn drive_step(
         );
     }
     let mut turn = if grounded {
-        vehicle.steer * vehicle.speed * dt / 2.8
+        vehicle.steer.tan() * vehicle.speed * dt / WHEELBASE
     } else {
         0.0
     };
@@ -432,9 +456,14 @@ fn drive_step(
         vehicle.slide = Vec2::ZERO;
     }
     if grounded && landed {
-        let forward = next.rotation * FORWARD;
-        let distance =
-            (next.translation.xz() - from).dot(forward.xz()) / forward.xz().length_squared();
+        let distance = if moved {
+            let forward = (next.rotation * FORWARD).xz();
+            (next.translation.xz() - from).dot(forward) / forward.length_squared()
+        } else if !input.brake {
+            vehicle.throttle * BLOCKED_WHEEL_SPEED * dt
+        } else {
+            0.0
+        };
         vehicle.roll = (vehicle.roll + distance / WHEEL_RADIUS).rem_euclid(TAU);
     }
     vehicle.grounded = landed;
@@ -457,22 +486,7 @@ fn apply_traction(
     input: DriveInput,
     dt: f32,
 ) {
-    let target = if input.brake {
-        0.0
-    } else {
-        let water = terrain.water_depth_at(at.x, at.y);
-        let speed = if input.throttle >= 0.0 { 10.0 } else { 4.0 };
-        input.throttle * speed * (1.0 - 0.60 * water.min(FORD_DEPTH))
-    };
-    let acceleration = if input.brake {
-        18.0
-    } else if input.throttle == 0.0 {
-        3.5
-    } else {
-        6.0
-    };
-    vehicle.speed += (target - vehicle.speed).clamp(-acceleration * dt, acceleration * dt);
-    vehicle.steer += (input.steering * 0.48 - vehicle.steer).clamp(-3.0 * dt, 3.0 * dt);
+    apply_drive_controls(vehicle, input, terrain.water_depth_at(at.x, at.y), dt);
 
     let downhill = up.xz();
     if downhill.length() > MAX_GRIP_GRADE * up.y && downhill.dot(forward.xz()) * vehicle.speed < 0.0
@@ -483,6 +497,62 @@ fn apply_traction(
     vehicle.slide = (vehicle.slide + downhill * (GRAVITY * up.y * dt))
         .move_towards(Vec2::ZERO, MAX_GRIP_GRADE * GRAVITY * up.y * up.y * dt)
         .clamp_length_max(12.0);
+}
+
+fn apply_drive_controls(vehicle: &mut Vehicle, input: DriveInput, depth: f32, dt: f32) {
+    let reversing = input.throttle * vehicle.speed < 0.0;
+    let pedal = if input.brake || reversing {
+        0.0
+    } else {
+        input.throttle
+    };
+    if pedal == 0.0 || pedal * vehicle.throttle < 0.0 {
+        vehicle.throttle = 0.0;
+    }
+    vehicle.throttle += (pedal - vehicle.throttle) * response(9.0, dt);
+
+    let water = depth.min(FORD_DEPTH);
+    // Drop to the original speed range in wadable water.
+    let wading = (water / 0.25).clamp(0.0, 1.0);
+    let top_speed = if pedal >= 0.0 {
+        FORWARD_SPEED + (LOW_RANGE_SPEED - FORWARD_SPEED) * wading
+    } else {
+        REVERSE_SPEED
+    };
+    let target = pedal * top_speed * (1.0 - 0.60 * water);
+    let acceleration = if input.brake {
+        18.0
+    } else if reversing {
+        8.0
+    } else if pedal == 0.0 || vehicle.speed.abs() > target.abs() {
+        3.5
+    } else {
+        DRIVE_ACCELERATION * vehicle.throttle.abs()
+    };
+    let error = target - vehicle.speed;
+    let step = if pedal != 0.0 && error.abs() >= 0.02 {
+        error * response(5.5, dt)
+    } else {
+        error
+    };
+    let limit = acceleration * dt;
+    vehicle.speed += step.clamp(-limit, limit);
+
+    let speed = vehicle.speed.abs();
+    let fast = (speed / LOW_RANGE_SPEED).min(1.0);
+    let maximum = if speed <= LOW_RANGE_SPEED {
+        MAX_STEER + (FAST_STEER - MAX_STEER) * fast
+    } else {
+        // Keep a full steering input from increasing the old maximum turn rate.
+        (FAST_STEER.tan() * LOW_RANGE_SPEED / speed).atan()
+    };
+    let target_steer = input.steering * maximum;
+    let steer_error = target_steer - vehicle.steer;
+    if steer_error.abs() < 0.002 {
+        vehicle.steer = target_steer;
+    } else {
+        vehicle.steer += steer_error * response(8.5 - fast * 2.5, dt);
+    }
 }
 
 fn settle(
@@ -576,6 +646,173 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
+
+    #[test]
+    fn faster_top_speed_does_not_increase_high_speed_yaw_or_ford_speed() {
+        let forward = DriveInput {
+            throttle: 1.0,
+            steering: 1.0,
+            brake: false,
+        };
+        let mut dry = Vehicle::default();
+        let mut ford = Vehicle::default();
+        for _ in 0..250 {
+            apply_drive_controls(&mut dry, forward, 0.0, 0.02);
+            apply_drive_controls(&mut ford, forward, 0.32, 0.02);
+        }
+        assert!((15.9..=16.0).contains(&dry.speed));
+        assert!((8.0..8.2).contains(&ford.speed));
+        let turn_rate = dry.steer.tan() * dry.speed / WHEELBASE;
+        assert!((0.85..1.0).contains(&turn_rate));
+
+        let mut reverse = Vehicle::default();
+        for _ in 0..150 {
+            apply_drive_controls(
+                &mut reverse,
+                DriveInput {
+                    throttle: -1.0,
+                    ..forward
+                },
+                0.0,
+                0.02,
+            );
+        }
+        assert!((-4.0..-3.95).contains(&reverse.speed));
+    }
+
+    #[test]
+    fn throttle_eases_in_and_fast_steering_stays_gentle() {
+        let terrain = Terrain::new();
+        let origin = Vec2::new(40.0, -128.0);
+        let support = contact::sample(origin, Quat::IDENTITY, |at| terrain.mesh_height_at(at));
+        let mut at =
+            Transform::from_xyz(origin.x, support.height, origin.y).with_rotation(support.rotation);
+        let mut vehicle = Vehicle::default();
+        let input = DriveInput {
+            throttle: 1.0,
+            steering: 0.0,
+            brake: false,
+        };
+        drive_step(&mut vehicle, &mut at, &terrain, input, 0.02, |_| false);
+        assert!(
+            (0.005..0.08).contains(&vehicle.speed),
+            "abrupt launch: {}",
+            vehicle.speed
+        );
+        for _ in 0..105 {
+            drive_step(&mut vehicle, &mut at, &terrain, input, 0.02, |_| false);
+        }
+
+        assert!(vehicle.speed > 9.0, "throttle never built up");
+        let turn = DriveInput {
+            steering: 1.0,
+            ..input
+        };
+        drive_step(&mut vehicle, &mut at, &terrain, turn, 0.02, |_| false);
+        assert!(vehicle.steer > 0.0 && vehicle.steer < 0.046);
+        for _ in 0..20 {
+            drive_step(&mut vehicle, &mut at, &terrain, turn, 0.02, |_| false);
+        }
+        assert!(
+            (0.17..0.32).contains(&vehicle.steer),
+            "steering at speed: {}",
+            vehicle.steer
+        );
+        let steer = vehicle.steer;
+        drive_step(&mut vehicle, &mut at, &terrain, input, 0.02, |_| false);
+        assert!((0.7 * steer..steer).contains(&vehicle.steer));
+
+        let mut parked = Vehicle::default();
+        let turn_in_place = DriveInput {
+            throttle: 0.0,
+            ..turn
+        };
+        for _ in 0..25 {
+            apply_drive_controls(&mut parked, turn_in_place, 0.0, 0.02);
+        }
+        assert!(parked.steer > 0.44, "lost low-speed steering lock");
+    }
+
+    #[test]
+    fn switching_direction_stops_before_reversing_and_the_brake_takes_priority() {
+        let mut vehicle = Vehicle {
+            speed: 5.0,
+            throttle: 1.0,
+            ..default()
+        };
+        let reverse = DriveInput {
+            throttle: -1.0,
+            steering: 0.0,
+            brake: false,
+        };
+        apply_drive_controls(&mut vehicle, reverse, 0.0, 0.02);
+        assert!(vehicle.speed > 4.7);
+        let mut stopped = false;
+        for _ in 0..54 {
+            apply_drive_controls(&mut vehicle, reverse, 0.0, 0.02);
+            stopped |= vehicle.speed == 0.0;
+        }
+        assert!(stopped && vehicle.speed < -1.0);
+        let pre_brake = vehicle.speed;
+        let brake = DriveInput {
+            brake: true,
+            ..reverse
+        };
+        apply_drive_controls(&mut vehicle, brake, 0.0, 0.02);
+        assert!(vehicle.speed - pre_brake >= 0.35);
+        for _ in 0..20 {
+            apply_drive_controls(&mut vehicle, brake, 0.0, 0.02);
+        }
+        assert_eq!(vehicle.speed, 0.0);
+    }
+
+    #[test]
+    fn throttle_spins_blocked_wheels_in_either_direction_but_braking_stops_them() {
+        let terrain = Terrain::new();
+        let origin = Vec2::new(40.0, -128.0);
+        let support = contact::sample(origin, Quat::IDENTITY, |at| terrain.mesh_height_at(at));
+        let rest =
+            Transform::from_xyz(origin.x, support.height, origin.y).with_rotation(support.rotation);
+        for throttle in [-1.0, 1.0] {
+            let mut at = rest;
+            let mut vehicle = Vehicle::default();
+            for _ in 0..10 {
+                let before = vehicle.roll;
+                drive_step(
+                    &mut vehicle,
+                    &mut at,
+                    &terrain,
+                    DriveInput {
+                        throttle,
+                        steering: 0.0,
+                        brake: false,
+                    },
+                    0.02,
+                    |_| true,
+                );
+                let spin = (vehicle.roll - before + PI).rem_euclid(TAU) - PI;
+                assert!(spin * throttle > 0.005);
+                assert_eq!(at.translation, rest.translation);
+                assert_eq!(vehicle.speed, 0.0);
+            }
+            let before = vehicle.roll;
+            for brake in [true, false] {
+                drive_step(
+                    &mut vehicle,
+                    &mut at,
+                    &terrain,
+                    DriveInput {
+                        throttle: if brake { throttle } else { 0.0 },
+                        steering: 0.0,
+                        brake,
+                    },
+                    0.02,
+                    |_| true,
+                );
+                assert_eq!(vehicle.roll, before);
+            }
+        }
+    }
 
     #[test]
     fn enters_drives_and_exits_with_one_press_each() {
@@ -811,7 +1048,7 @@ mod tests {
             app.world()
                 .get::<Vehicle>(vehicle)
                 .expect("parked at the bank")
-                .speed(),
+                .speed,
             0.0
         );
     }

@@ -1,0 +1,30 @@
+{
+  "task_id": "5a5f66b6-d6f5-422b-a9f2-a6498e6e64d5",
+  "type": "text_to_model",
+  "status": "success",
+  "input": {
+    "pbr": false,
+    "prompt": "An abandoned electrical substation: rusted transformers, ceramic insulators, a fallen high-voltage pylon, tangled cables, chain-link fence, weeds, post-apocalyptic wasteland, no people",
+    "delight": false,
+    "texture": true,
+    "export_uv": true,
+    "model_version": "P2-20260801",
+    "texture_quality": "detailed",
+    "texture_version": "v3.5-20260815",
+    "texture_alignment": "geometry"
+  },
+  "output_fields": [
+    "model_url",
+    "rendered_image_url",
+    "generated_image_url"
+  ],
+  "credits_consumed": 120,
+  "created_at": "2026-11-20T17:22:20.541401Z",
+  "completed_at": "2026-11-20T17:24:11.962876Z",
+  "files": [
+    "model.glb",
+    "rendered_image.webp",
+    "generated_image.jpeg",
+    "preview.png"
+  ]
+}

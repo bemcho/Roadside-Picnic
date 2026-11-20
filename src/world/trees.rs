@@ -10,7 +10,9 @@ use crate::assets;
 
 use super::collision::{Collider, Pillar};
 use super::hydrology::Wetlands;
+use super::scenery::TREE_DENSITY;
 use super::terrain::{HALF_SIZE, SPAWN, TILE_SIZE, Terrain, lattice_hash, smoothstep, value_noise};
+use super::{detail_range, range_scene_meshes};
 
 /// Spacing of the placement grid; each cell holds at most one stand.
 const CELL: f32 = 16.0;
@@ -41,6 +43,7 @@ const ROOT_SINK: f32 = 0.15;
 /// Pillars at or below this height (model units) touch the ground; the stand
 /// is sunk so none of them floats.
 const GROUND_CONTACT: f32 = 0.01;
+pub(super) const DEAD_FOREST: usize = 0;
 
 /// Extracted fauna models and their collision pillars.
 const MODELS: [(&str, &[Pillar]); 4] = [
@@ -97,6 +100,9 @@ pub(super) fn tree_sites(terrain: &Terrain, tile: IVec2) -> Vec<TreeSite> {
             } else {
                 usize::from(roll(6) > 0.43)
             };
+            if model == DEAD_FOREST && roll(2) >= density * TREE_DENSITY {
+                continue;
+            }
             let scale = SCALE_RANGE.0 + (SCALE_RANGE.1 - SCALE_RANGE.0) * roll(4);
             let rotation = Quat::from_rotation_y(roll(5) * TAU);
             let contacts = ground_contacts(MODELS[model].1)
@@ -155,11 +161,14 @@ pub(super) fn spawn_trees(
     let scenes = MODELS.map(|(path, _)| asset_server.load(format!("{path}#Scene0")));
     for site in sites {
         let (_, pillars) = MODELS[site.model];
-        parent.spawn((
-            WorldAssetRoot(scenes[site.model].clone()),
-            site.transform,
-            Collider(pillars),
-        ));
+        parent
+            .spawn((
+                WorldAssetRoot(scenes[site.model].clone()),
+                site.transform,
+                Collider(pillars),
+                detail_range(105.0, 20.0),
+            ))
+            .observe(range_scene_meshes);
     }
 }
 
@@ -182,7 +191,7 @@ mod tests {
         let sites = all_sites(&terrain);
         assert_eq!(sites, all_sites(&terrain));
         assert!(
-            (300..=2200).contains(&sites.len()),
+            (250..=2200).contains(&sites.len()),
             "{} stands",
             sites.len()
         );

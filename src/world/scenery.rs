@@ -10,7 +10,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::player::Player;
 
-use super::canopy::ForestTree;
+use super::canopy::{self, ForestTree};
 use super::collision::{Collider, Pillar};
 use super::hydrology::Wetlands;
 use super::plants::{self, PlantModels, PlantSite};
@@ -18,6 +18,7 @@ use super::terrain::{TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_n
 use super::trees::{self, TreeSite};
 
 const SEED: u32 = 0xD33D_305A;
+pub(super) const TREE_DENSITY: f32 = 0.25;
 const TRUNK: &[Pillar] = &[Pillar {
     x: 0.0,
     z: 0.0,
@@ -53,7 +54,33 @@ impl Site {
             Kind::Rock => BOULDER,
         })
     }
+
+    pub(super) fn falling_mesh(self) -> Option<Mesh> {
+        let mut batch = Batch::default();
+        pine(self, &mut batch);
+        batch
+            .finish(true)
+            .map(|mesh| mesh.translated_by(-self.pose.translation))
+    }
 }
+
+#[derive(Component, Clone, Copy)]
+pub(super) enum StandingTree {
+    Pine(Site),
+    Imported(ForestTree),
+}
+
+impl StandingTree {
+    pub(super) fn pose(self) -> Transform {
+        match self {
+            Self::Pine(site) => site.pose,
+            Self::Imported(tree) => tree.pose,
+        }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct ForestBatch(pub IVec2);
 
 #[derive(Clone)]
 pub(super) struct Sites {
@@ -61,6 +88,19 @@ pub(super) struct Sites {
     pub canopies: Vec<ForestTree>,
     pub undergrowth: Vec<TreeSite>,
     pub plants: Vec<PlantSite>,
+}
+
+impl Sites {
+    pub(super) fn forest_mesh(&self, terrain: &Terrain, tile: IVec2) -> Option<Mesh> {
+        let mut forest = Batch::default();
+        for &site in &self.solids {
+            if site.kind == Kind::Pine {
+                pine(site, &mut forest);
+            }
+        }
+        grow_reeds(terrain, tile, &mut forest);
+        forest.finish(true)
+    }
 }
 
 #[derive(Resource)]
@@ -80,6 +120,14 @@ pub(super) fn forest_density(x: f32, z: f32) -> f32 {
         (Vec2::new(-491.0, 105.0), Vec2::new(250.0, 274.0)),
         (Vec2::new(520.0, -245.0), Vec2::new(248.0, 350.0)),
         (Vec2::new(168.0, 499.0), Vec2::new(201.0, 134.0)),
+        (Vec2::new(-1150.0, 70.0), Vec2::new(350.0, 500.0)),
+        (Vec2::new(-1610.0, 740.0), Vec2::new(510.0, 305.0)),
+        (Vec2::new(-1650.0, -580.0), Vec2::new(610.0, 445.0)),
+        (Vec2::new(-630.0, -1250.0), Vec2::new(375.0, 440.0)),
+        (Vec2::new(150.0, 1510.0), Vec2::new(473.0, 525.0)),
+        (Vec2::new(1260.0, 800.0), Vec2::new(420.0, 430.0)),
+        (Vec2::new(1090.0, -895.0), Vec2::new(445.0, 385.0)),
+        (Vec2::new(2020.0, -540.0), Vec2::new(430.0, 280.0)),
     ];
     let core = regions
         .into_iter()
@@ -108,7 +156,8 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
             let y = terrain.height_at(p.x, p.y);
             let scale = match kind {
                 Kind::Pine => {
-                    if chance > forest_density(p.x, p.y) * terrain.woodland_at(p.x, p.y)
+                    if chance
+                        > TREE_DENSITY * forest_density(p.x, p.y) * terrain.woodland_at(p.x, p.y)
                         || terrain.water_depth_at(p.x, p.y) > 0.0
                     {
                         continue;
@@ -157,15 +206,13 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
 pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>, Option<Mesh>) {
     let pines = sites_for_tile(terrain, tile, 8.0, Kind::Pine);
     let rocks = sites_for_tile(terrain, tile, 16.0, Kind::Rock);
-    let mut forest = Batch::default();
     let mut stone = Batch::default();
-    let mut canopies = Vec::new();
+    let mut canopies = canopy::hangar_trees(terrain, tile);
     let mut solids = Vec::new();
     for site in pines {
         if let Some(tree) = ForestTree::replace_pine(terrain, site.pose, site.seed) {
             canopies.push(tree);
         } else {
-            pine(site, &mut forest);
             solids.push(site);
         }
     }
@@ -173,17 +220,24 @@ pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>
         rock(site, &mut stone);
         solids.push(site);
     }
-    grow_reeds(terrain, tile, &mut forest);
-    (
-        Sites {
-            solids,
-            canopies,
-            undergrowth: trees::tree_sites(terrain, tile),
-            plants: plants::plant_sites(terrain, tile),
-        },
-        forest.finish(true),
-        stone.finish(false),
-    )
+    let sites = Sites {
+        solids,
+        canopies,
+        undergrowth: trees::tree_sites(terrain, tile),
+        plants: plants::plant_sites(terrain, tile),
+    };
+    let forest = sites.forest_mesh(terrain, tile);
+    (sites, forest, stone.finish(false))
+}
+
+pub(super) fn build_scenic_forest(terrain: &Terrain, tile: IVec2) -> Option<Mesh> {
+    let mut forest = Batch::default();
+    for mut site in sites_for_tile(terrain, tile, 16.0, Kind::Pine) {
+        let at = site.pose.translation.xz();
+        site.pose.translation.y = terrain.scenic_height_at(at) - 0.16;
+        pine(site, &mut forest);
+    }
+    forest.finish(true)
 }
 
 pub(super) fn stream_scenery(
@@ -222,10 +276,13 @@ pub(super) fn stream_scenery(
                 ))
                 .with_children(|objects| {
                     for site in &sites.solids {
-                        objects.spawn((site.pose, site.solid()));
+                        let mut solid = objects.spawn((site.pose, site.solid()));
+                        if site.kind == Kind::Pine {
+                            solid.insert(StandingTree::Pine(*site));
+                        }
                     }
                     for tree in &sites.canopies {
-                        objects.spawn((tree.pose, tree.collider()));
+                        objects.spawn((tree.pose, tree.collider(), StandingTree::Imported(*tree)));
                     }
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
                     plants::spawn_plants(objects, &plants, &sites.plants);
@@ -451,11 +508,42 @@ mod tests {
     use crate::world::collision::{Body, push_out};
 
     #[test]
+    fn the_zone_has_about_a_quarter_of_its_original_standing_trees() {
+        let terrain = Terrain::new();
+        let mut living = 0;
+        let mut dead = 0;
+        for z in -6..6 {
+            for x in -6..6 {
+                let tile = IVec2::new(x, z);
+                living += sites_for_tile(&terrain, tile, 8.0, Kind::Pine).len();
+                dead += trees::tree_sites(&terrain, tile)
+                    .iter()
+                    .filter(|site| site.model == trees::DEAD_FOREST)
+                    .count();
+            }
+        }
+        // The unthinned seed placed 4,705 individual trees and 117 dead stands.
+        assert!((1115..=1235).contains(&living), "{living} individual trees");
+        assert!((24..=37).contains(&dead), "{dead} dead stands");
+    }
+
+    #[test]
+    fn frontier_groves_and_scenic_forests_extend_beyond_the_old_map() {
+        let terrain = Terrain::new();
+        let groves = (-11..-7)
+            .flat_map(|x| (-6..2).map(move |z| IVec2::new(x, z)))
+            .map(|tile| sites_for_tile(&terrain, tile, 8.0, Kind::Pine).len())
+            .sum::<usize>();
+        assert!(groves > 35, "{groves} frontier trees");
+        assert!((-8..-2).any(|z| { build_scenic_forest(&terrain, IVec2::new(-16, z)).is_some() }));
+    }
+
+    #[test]
     fn forest_cores_are_dense_and_stay_off_the_water_and_route() {
         let terrain = Terrain::new();
         let dense = sites_for_tile(&terrain, IVec2::new(-2, -1), 8.0, Kind::Pine);
         let clear = sites_for_tile(&terrain, IVec2::new(1, -5), 8.0, Kind::Pine);
-        assert!(dense.len() > 45 && dense.len() > clear.len() * 4);
+        assert!(dense.len() > 11 && dense.len() > clear.len() * 4);
         assert_eq!(
             dense,
             sites_for_tile(&terrain, IVec2::new(-2, -1), 8.0, Kind::Pine)
@@ -470,10 +558,18 @@ mod tests {
     }
 
     #[test]
-    fn groves_mix_all_three_imported_sizes_with_grounded_solid_trunks() {
+    fn groves_mix_all_five_species_with_grounded_solid_trunks() {
+        use canopy::Species;
+
         let terrain = Terrain::new();
-        let mut sizes = [false; 3];
-        for tile in [IVec2::new(-2, -1), IVec2::new(-2, 0), IVec2::new(1, 0)] {
+        let mut species = [false; Species::ALL.len()];
+        for tile in [
+            IVec2::new(-2, -1),
+            IVec2::new(-2, 0),
+            IVec2::new(1, 0),
+            IVec2::new(4, -2),
+            IVec2::new(-4, 3),
+        ] {
             let pines = sites_for_tile(&terrain, tile, 8.0, Kind::Pine);
             let (sites, _, _) = build_tile(&terrain, tile);
             let procedural = sites.solids.iter().filter(|s| s.kind == Kind::Pine).count();
@@ -481,15 +577,7 @@ mod tests {
             assert_eq!(sites.canopies.len() + procedural, pines.len());
             for tree in sites.canopies {
                 let pose = tree.pose;
-                let size = pose.scale.y;
-                let band = if size < 8.0 {
-                    0
-                } else if size < 20.0 {
-                    1
-                } else {
-                    2
-                };
-                sizes[band] = true;
+                species[tree.species as usize] = true;
                 let collider = tree.collider();
                 let trunk = collider.0[0];
                 let at = pose.transform_point(Vec3::new(trunk.x, 0.0, trunk.z));
@@ -511,7 +599,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(sizes, [true; 3]);
+        assert_eq!(species, [true; Species::ALL.len()]);
     }
 
     #[test]

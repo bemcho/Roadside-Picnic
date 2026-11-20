@@ -3,6 +3,7 @@ use std::f32::consts::PI;
 use bevy::prelude::*;
 
 use crate::assets;
+use crate::world::{detail_range, range_scene_meshes};
 
 use super::{Collider, Pillar};
 
@@ -29,6 +30,23 @@ impl Prop {
             WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(self.model))),
             self.pose(),
             Collider(self.pillars),
+        )
+    }
+
+    fn spotlight(&self) -> (SpotLight, Transform) {
+        let pose = self.pose();
+        let target = pose.transform_point(Vec3::Y * 0.50);
+        let lamp = target + Vec3::Y * 3.1 + pose.rotation * Vec3::Z * 1.95;
+        (
+            SpotLight {
+                color: Color::srgb(1.0, 0.87, 0.71),
+                intensity: 3.2e6,
+                range: 5.8,
+                inner_angle: 0.16,
+                outer_angle: 0.34,
+                ..default()
+            },
+            Transform::from_translation(lamp).looking_at(target, Vec3::Y),
         )
     }
 }
@@ -154,13 +172,21 @@ pub(super) fn spawn_hangar_props(
     });
     commands.entity(hall).with_children(|interior| {
         for prop in FURNITURE {
-            interior.spawn(prop.bundle(server));
+            interior
+                .spawn((prop.bundle(server), detail_range(75.0, 15.0)))
+                .observe(range_scene_meshes);
         }
-        interior.spawn(TOOL_RACK.bundle(server)).with_child((
-            Mesh3d(panel),
-            MeshMaterial3d(backing),
-            Transform::from_xyz(0.0, 0.455, -0.052),
-        ));
+        interior
+            .spawn((TOOL_RACK.bundle(server), detail_range(75.0, 15.0)))
+            .observe(range_scene_meshes)
+            .with_child((
+                Mesh3d(panel),
+                MeshMaterial3d(backing),
+                Transform::from_xyz(0.0, 0.455, -0.052),
+            ));
+        for prop in FURNITURE.iter().chain([&TOOL_RACK]) {
+            interior.spawn(prop.spotlight());
+        }
     });
 }
 

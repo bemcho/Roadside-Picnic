@@ -2,11 +2,12 @@
 
 use bevy::prelude::*;
 
-use super::terrain::{fbm, lerp, smoothstep, value_noise};
+use super::terrain::{HALF_SIZE, fbm, lerp, smoothstep, value_noise};
 
 pub(super) const WATER_LEVEL: f32 = -3.0;
 pub(super) const LAKE: Vec2 = Vec2::new(-365.0, 327.0);
 pub(super) const SWAMP: Vec2 = Vec2::new(-165.0, 238.0);
+const WEST_BASIN: Vec2 = Vec2::new(-2020.0, 333.0);
 const FORD_X: f32 = 35.0;
 
 pub(super) struct Wetlands {
@@ -14,6 +15,7 @@ pub(super) struct Wetlands {
     tributary: f32,
     lake: f32,
     marsh: f32,
+    coast: f32,
 }
 
 fn river_z(x: f32) -> f32 {
@@ -37,11 +39,24 @@ impl Wetlands {
             f32::INFINITY
         };
         let lake_p = Vec2::new(x, z) - LAKE;
-        let lake = if lake_p.abs().cmple(Vec2::new(226.0, 166.0)).all() {
+        let inner_lake = if lake_p.abs().cmple(Vec2::new(226.0, 166.0)).all() {
             (lake_p / Vec2::new(124.0, 90.0)).length()
                 + (value_noise(x / 47.0, z / 47.0, 0x1A5E) - 0.5) * 0.26
         } else {
             f32::INFINITY
+        };
+        let basin = Vec2::new(x, z) - WEST_BASIN;
+        let west_lake = if basin.abs().cmple(Vec2::new(400.0, 335.0)).all() {
+            (basin / Vec2::new(263.0, 198.0)).length()
+                + (value_noise(x / 88.0, z / 88.0, 0x7CE) - 0.5) * 0.24
+        } else {
+            f32::INFINITY
+        };
+        let coast = if z < -HALF_SIZE + 90.0 {
+            let shore = -HALF_SIZE - 118.0 + 34.0 * (x / 230.0).sin() + 16.0 * (x / 91.0).sin();
+            shore - z
+        } else {
+            f32::NEG_INFINITY
         };
         let swamp_p = Vec2::new(x, z) - SWAMP;
         let marsh = if swamp_p.abs().cmple(Vec2::new(137.0, 108.0)).all() {
@@ -57,8 +72,9 @@ impl Wetlands {
         Self {
             river,
             tributary,
-            lake,
+            lake: inner_lake.min(west_lake),
             marsh,
+            coast,
         }
     }
 
@@ -89,6 +105,10 @@ impl Wetlands {
             let mud = WATER_LEVEL + 0.07 + 2.15 * hummocks;
             height = height.min(lerp(ground, mud, self.marsh));
         }
+        if self.coast > -105.0 {
+            let seabed = WATER_LEVEL - (self.coast * 0.115).clamp(-8.0, 31.0);
+            height = height.min(lerp(ground, seabed, smoothstep(-105.0, -10.0, self.coast)));
+        }
         if height.is_finite() { height } else { ground }
     }
 
@@ -96,7 +116,8 @@ impl Wetlands {
     pub(super) fn depth(&self, ground: f32) -> f32 {
         let boundary = ((1.24 - self.river).max(1.24 - self.tributary) * 7.0)
             .max((1.22 - self.lake) * 48.0)
-            .max((self.marsh - 0.62) * 6.0);
+            .max((self.marsh - 0.62) * 6.0)
+            .max(self.coast * 0.115);
         (WATER_LEVEL - ground).min(boundary)
     }
 
@@ -105,14 +126,19 @@ impl Wetlands {
     }
 
     pub(super) fn wetness(&self) -> f32 {
-        self.marsh.max(smoothstep(
-            1.42,
-            0.84,
-            self.river.min(self.tributary).min(self.lake),
-        ))
+        self.marsh
+            .max(smoothstep(-35.0, 4.0, self.coast))
+            .max(smoothstep(
+                1.42,
+                0.84,
+                self.river.min(self.tributary).min(self.lake),
+            ))
     }
 
     pub(super) fn flow(&self) -> Vec2 {
+        if self.coast >= 0.0 {
+            return Vec2::new(-0.18, 0.32);
+        }
         let current = 1.0 - smoothstep(0.82, 1.18, self.lake);
         let stream = if self.tributary < self.river {
             Vec2::NEG_Y
@@ -166,5 +192,16 @@ mod tests {
             }
         });
         assert!(wet > 100 && dry > 100, "{wet} wet, {dry} dry");
+    }
+
+    #[test]
+    fn coastal_water_and_the_western_basin_extend_past_the_playable_edge() {
+        let terrain = Terrain::new();
+        for x in [-1400.0, -250.0, 0.0, 1150.0] {
+            assert_eq!(terrain.water_depth_at(x, -HALF_SIZE + 12.0), 0.0);
+            assert!(terrain.water_depth_at(x, -HALF_SIZE - 240.0) > 5.0);
+        }
+        assert!(terrain.water_depth_at(WEST_BASIN.x, WEST_BASIN.y) > 10.0);
+        assert!(terrain.water_depth_at(-2250.0, river_z(-2250.0)) > 2.0);
     }
 }

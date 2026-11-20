@@ -55,9 +55,8 @@ pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {
     }
 }
 
-/// Gives every tiling (repeat-sampled) texture a mip chain once it loads:
-/// the loader doesn't, and distant tiling surfaces shimmer without one.
-pub(super) fn mipmap_tiling_textures(mut images: ResMut<Assets<Image>>) {
+/// Builds mip chains for repeating textures and surfaces with anisotropic filtering.
+pub(super) fn mipmap_filtered_textures(mut images: ResMut<Assets<Image>>) {
     let pending: Vec<_> = images
         .iter()
         .filter(|(_, image)| {
@@ -67,6 +66,7 @@ pub(super) fn mipmap_tiling_textures(mut images: ResMut<Assets<Image>>) {
                     &image.sampler,
                     ImageSampler::Descriptor(sampler)
                         if sampler.address_mode_u == ImageAddressMode::Repeat
+                            || sampler.anisotropy_clamp > 1
                 )
         })
         .map(|(id, _)| id)
@@ -78,7 +78,6 @@ pub(super) fn mipmap_tiling_textures(mut images: ResMut<Assets<Image>>) {
     }
 }
 
-// Build once after loading: mipmaps prevent distant gravel from shimmering.
 fn generate_mipmaps(image: &mut Image) {
     let format = image.texture_descriptor.format;
     if !matches!(
@@ -143,6 +142,44 @@ mod tests {
     use bevy::render::render_resource::{Extent3d, TextureDimension};
 
     use super::*;
+
+    #[test]
+    fn mipmaps_opt_in_for_anisotropic_clamped_atlases() {
+        let mut app = App::new();
+        let mut images = Assets::<Image>::default();
+        let baseline = Image::new_fill(
+            Extent3d {
+                width: 3,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[128, 128, 255, 255],
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::default(),
+        );
+        let mut atlas = baseline.clone();
+        atlas.sampler = ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+            anisotropy_clamp: 8,
+            ..bevy::image::ImageSamplerDescriptor::linear()
+        });
+        let ordinary = images.add(baseline);
+        let filtered = images.add(atlas);
+        app.insert_resource(images)
+            .add_systems(Update, mipmap_filtered_textures);
+
+        app.update();
+        let images = app.world().resource::<Assets<Image>>();
+        let levels = |handle| {
+            images
+                .get(handle)
+                .expect("test image")
+                .texture_descriptor
+                .mip_level_count
+        };
+        assert_eq!(levels(&ordinary), 1);
+        assert_eq!(levels(&filtered), 2);
+    }
 
     #[test]
     fn mipmaps_average_color_in_linear_space_but_preserve_data_maps() {

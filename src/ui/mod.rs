@@ -6,6 +6,7 @@
 mod splash;
 pub mod text;
 
+use bevy::diagnostic::{Diagnostic, DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
 use crate::audio::AudioMode;
@@ -27,6 +28,9 @@ struct UiRoot;
 struct HudStats;
 
 #[derive(Component)]
+struct HudFps;
+
+#[derive(Component)]
 struct VehiclePrompt;
 
 #[derive(Component)]
@@ -38,13 +42,14 @@ struct PauseMenuRoot;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(splash::SplashPlugin)
+        app.add_plugins((splash::SplashPlugin, FrameTimeDiagnosticsPlugin::new(20)))
             .add_systems(OnEnter(AppState::InGame), spawn_hud)
             .add_systems(OnExit(AppState::InGame), despawn_hud)
             .add_systems(
                 Update,
                 update_hud_stats.run_if(in_state(InGamePhase::Running)),
             )
+            .add_systems(Update, update_fps.run_if(in_state(AppState::InGame)))
             .add_systems(
                 PostUpdate,
                 update_vehicle_prompt.run_if(in_state(AppState::InGame)),
@@ -100,6 +105,26 @@ fn spawn_hud(mut commands: Commands) {
             },
         ));
 
+        hud.spawn((
+            HudFps,
+            Text::new(text::HUD_FPS_PENDING),
+            TextFont {
+                font_size: FontSize::Px(16.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.85, 0.85, 0.8)),
+            TextShadow {
+                offset: Vec2::splat(1.0),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                right: Val::Px(12.0),
+                ..default()
+            },
+        ));
+
         // Bottom-left corner: controls hint.
         hud.spawn((
             HudControls,
@@ -148,6 +173,20 @@ fn update_hud_stats(run: Res<ZoneRun>, mut stats: Query<&mut Text, With<HudStats
         return;
     };
     **text = text::hud_zone_stats(run.artifacts_collected, run.anomalies_triggered);
+}
+
+fn update_fps(diagnostics: Res<DiagnosticsStore>, mut fps: Single<&mut Text, With<HudFps>>) {
+    let Some(milliseconds) = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(Diagnostic::smoothed)
+        .filter(|&value| value.is_finite() && value > 0.0)
+    else {
+        return;
+    };
+    let line = text::hud_fps(1000.0 / milliseconds);
+    if fps.0 != line {
+        fps.0 = line;
+    }
 }
 
 fn update_vehicle_prompt(
@@ -245,5 +284,34 @@ fn spawn_pause_menu(mut commands: Commands) {
 fn despawn_pause_menu(mut commands: Commands, roots: Query<Entity, With<PauseMenuRoot>>) {
     for root in &roots {
         commands.entity(root).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use bevy::time::TimeUpdateStrategy;
+
+    use super::*;
+
+    #[test]
+    fn hud_displays_frames_per_second_from_real_frame_time() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, FrameTimeDiagnosticsPlugin::new(20)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                40,
+            )))
+            .add_systems(Startup, spawn_hud)
+            .add_systems(Update, update_fps);
+        for _ in 0..4 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let line = world
+            .query_filtered::<&Text, With<HudFps>>()
+            .single(world)
+            .expect("one FPS counter in the HUD");
+        assert_eq!(line.0, "FPS: 25");
     }
 }

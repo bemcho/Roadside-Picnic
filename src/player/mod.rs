@@ -73,6 +73,7 @@ impl Default for Player {
 /// The stalker's vertical motion and current gait.
 #[derive(Component, Default)]
 pub struct Locomotion {
+    planar_velocity: Vec2,
     pub vertical_speed: f32,
     pub grounded: bool,
     pub gait: Gait,
@@ -126,7 +127,7 @@ const SPAWN_YAW: f32 = PI;
 /// Where the stalker stands at the start of a run and after respawning:
 /// inside the base, facing out (model +Z) and away from the camera.
 fn spawn_transform(terrain: &Terrain) -> Transform {
-    let spawn = Vec3::new(SPAWN.0, terrain.height_at(SPAWN.0, SPAWN.1), SPAWN.1);
+    let spawn = Vec3::new(SPAWN.0, terrain.mesh_height_at(Vec2::from(SPAWN)), SPAWN.1);
     Transform::from_translation(spawn)
 }
 
@@ -211,7 +212,7 @@ fn respawn_player(
         };
     }
     for mut orbit in &mut cameras {
-        orbit.yaw = SPAWN_YAW;
+        orbit.reset_heading(SPAWN_YAW);
     }
 }
 
@@ -249,13 +250,6 @@ fn move_player(
 
     let direction = heading * input.normalize_or_zero();
 
-    // The model faces +Z at rotation 0; yaw so it faces the travel direction.
-    if direction != Vec3::ZERO {
-        let target = Quat::from_rotation_y(direction.x.atan2(direction.z));
-        let blend = 1.0 - (-10.0 * time.delta_secs()).exp();
-        transform.rotation = transform.rotation.slerp(target, blend);
-    }
-
     let crawling =
         locomotion.grounded && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let running = !crawling && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -268,7 +262,23 @@ fn move_player(
     };
     let wading = terrain.water_depth_at(transform.translation.x, transform.translation.z);
     let speed = speed * (1.0 - 0.46 * wading.min(1.0));
-    let step = direction * speed * time.delta_secs();
+    let dt = time.delta_secs();
+    let desired = direction.xz() * speed;
+    let rate = if crawling { 26.0 } else { 18.0 };
+    locomotion.planar_velocity = locomotion.planar_velocity.lerp(desired, response(rate, dt));
+    if crawling || wading > 0.0 {
+        locomotion.planar_velocity = locomotion.planar_velocity.clamp_length_max(speed);
+    }
+    if desired == Vec2::ZERO && locomotion.planar_velocity.length_squared() < 0.001 {
+        locomotion.planar_velocity = Vec2::ZERO;
+    }
+    // The stalker faces +Z in the rig's resting pose.
+    let velocity = locomotion.planar_velocity;
+    if velocity.length_squared() > 0.001 {
+        let target = Quat::from_rotation_y(velocity.x.atan2(velocity.y));
+        transform.rotation = transform.rotation.slerp(target, response(10.0, dt));
+    }
+    let step = Vec3::new(velocity.x, 0.0, velocity.y) * dt;
     let target = transform.translation + step;
     let body = if crawling { PRONE } else { STANDING };
     let clear = push_out(target.xz(), target.y, body, colliders);
@@ -280,6 +290,9 @@ fn move_player(
         from
     };
     let ground = ground_position(&terrain, Vec3::new(clear.x, target.y, clear.y));
+    if dt > 0.0 && ground.xz().distance_squared(target.xz()) > 1e-8 {
+        locomotion.planar_velocity = (ground.xz() - from).clamp_length_max(step.length()) / dt;
+    }
 
     if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
         locomotion.vertical_speed = player.jump_speed;
@@ -289,7 +302,7 @@ fn move_player(
         locomotion.vertical_speed,
         locomotion.grounded,
         ground.y,
-        time.delta_secs(),
+        dt,
     );
     transform.translation = Vec3::new(ground.x, y, ground.z);
     locomotion.vertical_speed = vertical_speed;
@@ -303,6 +316,10 @@ fn move_player(
         (true, false, true, false) => Gait::Walk,
         (true, false, true, true) => Gait::Run,
     };
+}
+
+fn response(rate: f32, dt: f32) -> f32 {
+    -(-rate * dt).exp_m1()
 }
 
 /// Advances height `y` with vertical speed `vy` over `dt` under gravity,
@@ -330,7 +347,7 @@ fn ground_position(terrain: &Terrain, position: Vec3) -> Vec3 {
     let limit = TERRAIN_HALF_SIZE - EDGE_MARGIN;
     let x = position.x.clamp(-limit, limit);
     let z = position.z.clamp(-limit, limit);
-    Vec3::new(x, terrain.height_at(x, z), z)
+    Vec3::new(x, terrain.mesh_height_at(Vec2::new(x, z)), z)
 }
 
 #[cfg(test)]
@@ -340,6 +357,8 @@ mod tests {
     #[test]
     fn stalker_cannot_leave_the_terrain() {
         let terrain = Terrain::new();
+        let frontier = ground_position(&terrain, Vec3::new(1200.0, 0.0, -1200.0));
+        assert_eq!(frontier.xz(), Vec2::new(1200.0, -1200.0));
         let limit = TERRAIN_HALF_SIZE - EDGE_MARGIN;
         let outside = TERRAIN_HALF_SIZE + 20.0;
         let grounded = ground_position(&terrain, Vec3::new(outside, 0.0, -outside));
@@ -397,7 +416,7 @@ mod tests {
                 .get::<Transform>(player)
                 .expect("player")
                 .translation;
-            assert!((feet.y - terrain.height_at(feet.x, feet.z)).abs() < 1e-4);
+            assert!((feet.y - terrain.mesh_height_at(feet.xz())).abs() < 1e-4);
             let mut cameras = app
                 .world_mut()
                 .query_filtered::<&Transform, With<PlayerCamera>>();
@@ -518,11 +537,34 @@ mod tests {
         assert!(locomotion.grounded);
         let travelled = feet(&app, player).xz().length();
         let crawl_speed = Player::default().crawl_speed;
-        // The first update has no elapsed time.
         assert!(
-            (travelled - crawl_speed * 39.0 * 0.05).abs() < 1e-3,
+            (1.30..crawl_speed * 39.0 * 0.05).contains(&travelled),
             "{travelled} m"
         );
+    }
+
+    #[test]
+    fn movement_eases_in_and_stops_without_a_long_slide() {
+        let (mut app, player) = moving_app(&[KeyCode::KeyW, KeyCode::ShiftLeft]);
+        app.update();
+        let start = feet(&app, player);
+        app.update();
+        let first = start.distance(feet(&app, player));
+        assert!((0.05..0.20).contains(&first));
+        for _ in 0..15 {
+            app.update();
+        }
+        let release = feet(&app, player);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyW);
+        for _ in 0..12 {
+            app.update();
+        }
+        let stopped = feet(&app, player);
+        assert!((0.08..0.3).contains(&release.xz().distance(stopped.xz())));
+        app.update();
+        assert_eq!(feet(&app, player), stopped);
     }
 
     #[test]

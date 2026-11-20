@@ -11,16 +11,53 @@ use bevy::prelude::*;
 
 use super::hydrology::Wetlands;
 
-/// World-space extent of the terrain, in units, centered on the origin.
-const SIZE: f32 = 1536.0;
-
-/// Distance from the origin to each terrain edge along X and Z.
-pub const HALF_SIZE: f32 = SIZE / 2.0;
+const PLAYABLE_HALF_METRES: u32 = 1720;
+/// The traversal limit; visible terrain extends past it.
+pub const HALF_SIZE: f32 = PLAYABLE_HALF_METRES as f32;
 
 pub(super) const TILE_SIZE: f32 = 128.0;
-pub(super) const TILE_RADIUS: i32 = (HALF_SIZE / TILE_SIZE) as i32;
+pub(super) const TILE_RADIUS: i32 = PLAYABLE_HALF_METRES.div_ceil(TILE_SIZE as u32) as i32;
 pub(super) const CELLS: usize = 64;
 pub(super) const SPACING: f32 = TILE_SIZE / CELLS as f32;
+pub(super) const SCENIC_TILE_RADIUS: i32 = 16;
+pub(super) const HORIZON_TILE_SIZE: f32 = TILE_SIZE * 4.0;
+pub(super) const HORIZON_TILE_RADIUS: i32 = 9;
+const SCENIC_HALF_SIZE: f32 = TILE_SIZE * SCENIC_TILE_RADIUS as f32;
+const DISTANT_SPACING: f32 = 8.0;
+const HORIZON_SPACING: f32 = 16.0;
+
+#[derive(Clone, Copy)]
+pub(super) struct TerrainGrid {
+    pub origin: Vec2,
+    pub spacing: f32,
+    pub cells: usize,
+}
+
+impl TerrainGrid {
+    pub fn detail(tile: IVec2) -> Self {
+        Self {
+            origin: tile.as_vec2() * TILE_SIZE,
+            spacing: SPACING,
+            cells: CELLS,
+        }
+    }
+
+    pub fn distant(tile: IVec2) -> Self {
+        Self {
+            origin: tile.as_vec2() * TILE_SIZE,
+            spacing: DISTANT_SPACING,
+            cells: (TILE_SIZE / DISTANT_SPACING) as usize,
+        }
+    }
+
+    pub fn horizon(tile: IVec2) -> Self {
+        Self {
+            origin: tile.as_vec2() * HORIZON_TILE_SIZE,
+            spacing: HORIZON_SPACING,
+            cells: (HORIZON_TILE_SIZE / HORIZON_SPACING) as usize,
+        }
+    }
+}
 
 /// Fixed noise seed.
 const SEED: u32 = 0x1972_2016;
@@ -62,7 +99,7 @@ const BASE_PAD_BLEND: f32 = 12.0;
 /// Where the stalker starts and respawns: inside the hangar, facing its bay.
 pub const SPAWN: (f32, f32) = (40.0, -123.0);
 
-/// Deterministic terrain model. Pure math until [`Terrain::build_tile`] is
+/// Deterministic terrain model. Pure math until [`Terrain::build_grid`] is
 /// called — insert as a resource so any system can sample the ground.
 #[derive(Resource, Clone)]
 pub struct Terrain {
@@ -83,20 +120,66 @@ impl Terrain {
 
     /// Height on the rendered tile triangles, including between grid vertices.
     pub(crate) fn mesh_height_at(&self, at: Vec2) -> f32 {
-        let grid = at / SPACING;
-        let cell = grid.floor() * SPACING;
+        if at.abs().max_element() > TILE_RADIUS as f32 * TILE_SIZE {
+            self.scenic_height_at(at)
+        } else {
+            self.interpolated_height(at, SPACING)
+        }
+    }
+
+    pub(super) fn scenic_height_at(&self, at: Vec2) -> f32 {
+        let spacing = if at.abs().max_element() > SCENIC_HALF_SIZE {
+            HORIZON_SPACING
+        } else {
+            DISTANT_SPACING
+        };
+        self.interpolated_height(at, spacing)
+    }
+
+    fn interpolated_height(&self, at: Vec2, spacing: f32) -> f32 {
+        let grid = at / spacing;
+        let cell = grid.floor() * spacing;
         let uv = grid - grid.floor();
-        let x = cell.x + SPACING;
-        let z = cell.y + SPACING;
-        let b = self.height_at(x, cell.y);
-        let c = self.height_at(cell.x, z);
+        let x = cell.x + spacing;
+        let z = cell.y + spacing;
+        let b = self.vertex_height(Vec2::new(x, cell.y), self.height_at(x, cell.y));
+        let c = self.vertex_height(Vec2::new(cell.x, z), self.height_at(cell.x, z));
         if uv.x + uv.y <= 1.0 {
-            let a = self.height_at(cell.x, cell.y);
+            let a = self.vertex_height(cell, self.height_at(cell.x, cell.y));
             a + (b - a) * uv.x + (c - a) * uv.y
         } else {
-            let d = self.height_at(x, z);
+            let d = self.vertex_height(Vec2::new(x, z), self.height_at(x, z));
             d + (c - d) * (1.0 - uv.x) + (b - d) * (1.0 - uv.y)
         }
+    }
+
+    fn vertex_height(&self, at: Vec2, sampled: f32) -> f32 {
+        edge_segment(at).map_or(sampled, |(a, b, t)| {
+            lerp(self.height_at(a.x, a.y), self.height_at(b.x, b.y), t)
+        })
+    }
+
+    fn stitched_sample(&self, at: Vec2, sampled: f32, wet: &Wetlands) -> (f32, WaterVertex) {
+        let water_at = |height, wet: &Wetlands| WaterVertex {
+            depth: wet.depth(height),
+            marsh: wet.marsh(),
+            flow: wet.flow(),
+        };
+        let Some((a, b, t)) = edge_segment(at) else {
+            return (sampled, water_at(sampled, wet));
+        };
+        let (ha, wa) = self.sample(a.x, a.y);
+        let (hb, wb) = self.sample(b.x, b.y);
+        let wa = water_at(ha, &wa);
+        let wb = water_at(hb, &wb);
+        (
+            lerp(ha, hb, t),
+            WaterVertex {
+                depth: lerp(wa.depth, wb.depth, t),
+                marsh: lerp(wa.marsh, wb.marsh, t),
+                flow: wa.flow.lerp(wb.flow, t),
+            },
+        )
     }
 
     pub(crate) fn water_depth_at(&self, x: f32, z: f32) -> f32 {
@@ -116,7 +199,7 @@ impl Terrain {
     }
 
     fn land_height(&self, x: f32, z: f32, wetlands: &Wetlands) -> f32 {
-        let mut h = hills(x, z) + mountains(x, z);
+        let mut h = hills(x, z) + mountains(x, z) + frontier_relief(x, z);
 
         // Bald hill: a smooth scorched mound.
         let bdx = x - BALD_CENTER.0;
@@ -236,16 +319,20 @@ impl Terrain {
     }
 
     /// A shared lattice and normal halo make neighboring chunks meet exactly.
-    pub(super) fn build_tile(&self, tile: IVec2) -> (Mesh, Vec<WaterVertex>) {
-        let n = CELLS + 1;
+    pub(super) fn build_grid(&self, grid: TerrainGrid) -> (Mesh, Vec<WaterVertex>) {
+        let TerrainGrid {
+            origin,
+            spacing,
+            cells,
+        } = grid;
+        let n = cells + 1;
         let halo = n + 2;
-        let origin = tile.as_vec2() * TILE_SIZE;
         let samples: Vec<_> = (0..halo)
             .flat_map(|z| {
                 (0..halo).map(move |x| {
                     self.sample(
-                        origin.x + (x as f32 - 1.0) * SPACING,
-                        origin.y + (z as f32 - 1.0) * SPACING,
+                        origin.x + (x as f32 - 1.0) * spacing,
+                        origin.y + (z as f32 - 1.0) * spacing,
                     )
                 })
             })
@@ -256,35 +343,42 @@ impl Terrain {
         let mut water = Vec::with_capacity(n * n);
 
         for iz in 0..n {
-            let z = origin.y + iz as f32 * SPACING;
+            let z = origin.y + iz as f32 * spacing;
             for ix in 0..n {
-                let x = origin.x + ix as f32 * SPACING;
+                let x = origin.x + ix as f32 * spacing;
                 let i = (iz + 1) * halo + ix + 1;
-                let (h, wet) = &samples[i];
-                let normal = Vec3::new(
-                    samples[i - 1].0 - samples[i + 1].0,
-                    2.0 * SPACING,
-                    samples[i - halo].0 - samples[i + halo].0,
-                )
-                .normalize();
+                let (sampled, wet) = &samples[i];
+                let (h, wet_vertex) = self.stitched_sample(Vec2::new(x, z), *sampled, wet);
+                let normal =
+                    if spacing != SPACING && (ix == 0 || iz == 0 || ix == cells || iz == cells) {
+                        Vec3::new(
+                            self.height_at(x - SPACING, z) - self.height_at(x + SPACING, z),
+                            2.0 * SPACING,
+                            self.height_at(x, z - SPACING) - self.height_at(x, z + SPACING),
+                        )
+                        .normalize()
+                    } else {
+                        Vec3::new(
+                            samples[i - 1].0 - samples[i + 1].0,
+                            2.0 * spacing,
+                            samples[i - halo].0 - samples[i + halo].0,
+                        )
+                        .normalize()
+                    };
                 let slope = normal.xz().length() / normal.y;
-                positions.push([x, *h, z]);
+                positions.push([x, h, z]);
                 normals.push(normal.to_array());
-                colors.push(self.surface_weights_at(x, z, *h, slope, wet));
-                water.push(WaterVertex {
-                    depth: wet.depth(*h),
-                    marsh: wet.marsh(),
-                    flow: wet.flow(),
-                });
+                colors.push(self.surface_weights_at(x, z, h, slope, wet));
+                water.push(wet_vertex);
             }
         }
 
-        let mut indices = Vec::with_capacity(CELLS * CELLS * 6);
-        for iz in 0..CELLS {
-            for ix in 0..CELLS {
-                let a = (iz * n + ix) as u32;
+        let mut indices = Vec::with_capacity(cells * cells * 6);
+        for iz in 0..cells {
+            for ix in 0..cells {
+                let a = (iz * n + ix) as u16;
                 let b = a + 1;
-                let c = a + n as u32;
+                let c = a + n as u16;
                 let d = c + 1;
                 indices.extend_from_slice(&[a, c, b, b, c, d]);
             }
@@ -294,7 +388,7 @@ impl Terrain {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
         );
-        mesh.insert_indices(Indices::U32(indices));
+        mesh.insert_indices(Indices::U16(indices));
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -307,6 +401,28 @@ pub(super) struct WaterVertex {
     pub depth: f32,
     pub marsh: f32,
     pub flow: Vec2,
+}
+
+// Intermediate land and water vertices share the straight segments of the coarser tile.
+fn edge_segment(at: Vec2) -> Option<(Vec2, Vec2, f32)> {
+    let (axis, coordinate) = if at.x % TILE_SIZE == 0.0 {
+        (Vec2::Y, at.y)
+    } else if at.y % TILE_SIZE == 0.0 {
+        (Vec2::X, at.x)
+    } else {
+        return None;
+    };
+    let step = if at.abs().max_element() >= SCENIC_HALF_SIZE {
+        HORIZON_SPACING
+    } else {
+        DISTANT_SPACING
+    };
+    let offset = coordinate.rem_euclid(step);
+    if offset == 0.0 {
+        return None;
+    }
+    let a = at - axis * offset;
+    Some((a, a + axis * step, offset / step))
 }
 
 fn road_at(x: f32, z: f32) -> Option<(usize, f32, f32)> {
@@ -342,6 +458,25 @@ fn hills(x: f32, z: f32) -> f32 {
     } else {
         local
     }
+}
+
+fn frontier_relief(x: f32, z: f32) -> f32 {
+    let p = Vec2::new(x, z);
+    if p.abs().max_element() < 740.0 {
+        return 0.0;
+    }
+    [
+        (Vec2::new(-1440.0, -1080.0), Vec2::new(480.0, 390.0), 86.0),
+        (Vec2::new(1280.0, 990.0), Vec2::new(410.0, 440.0), 107.0),
+        (Vec2::new(-1150.0, 1370.0), Vec2::new(460.0, 345.0), 118.0),
+        (Vec2::new(-2130.0, 1580.0), Vec2::new(560.0, 470.0), 102.0),
+        (Vec2::new(860.0, 2250.0), Vec2::new(620.0, 455.0), 99.0),
+    ]
+    .into_iter()
+    .map(|(center, radii, height)| {
+        height * smoothstep(1.0, 0.0, ((p - center) / radii).length_squared()).powi(2)
+    })
+    .sum()
 }
 
 fn mountains(x: f32, z: f32) -> f32 {
@@ -447,6 +582,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_playable_area_is_fivefold_with_landscape_past_the_far_plane() {
+        let area_ratio = (2.0 * HALF_SIZE / 1536.0).powi(2);
+        assert!((4.95..=5.1).contains(&area_ratio));
+        let horizon = HORIZON_TILE_SIZE * HORIZON_TILE_RADIUS as f32;
+        assert!(horizon - HALF_SIZE > 2700.0 + 20.0);
+    }
+
+    #[test]
     fn terrain_is_deterministic() {
         let terrain = Terrain::new();
         let a = terrain.height_at(12.3, -45.6);
@@ -501,8 +644,8 @@ mod tests {
     #[test]
     fn adjacent_chunks_share_positions_normals_and_surface_weights() {
         let terrain = Terrain::new();
-        let (mesh, _) = terrain.build_tile(IVec2::new(-1, 2));
-        let (neighbor, _) = terrain.build_tile(IVec2::new(0, 2));
+        let (mesh, _) = terrain.build_grid(TerrainGrid::detail(IVec2::new(-1, 2)));
+        let (neighbor, _) = terrain.build_grid(TerrainGrid::detail(IVec2::new(0, 2)));
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .expect("positions present");
@@ -521,6 +664,7 @@ mod tests {
             assert!((normal.length() - 1.0).abs() < 1e-5);
             assert!(normal.y > 0.0);
         }
+
         let n = CELLS + 1;
         use bevy::mesh::VertexAttributeValues::{Float32x3, Float32x4};
         for attribute in [
@@ -540,6 +684,47 @@ mod tests {
                     }
                 }
                 _ => panic!("missing terrain seam attributes"),
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_resolution_terrain_and_water_share_their_edge() {
+        use bevy::mesh::VertexAttributeValues::Float32x3;
+
+        let terrain = Terrain::new();
+        for (finer, coarser) in [
+            (
+                TerrainGrid::detail(IVec2::new(-14, 2)),
+                TerrainGrid::distant(IVec2::new(-15, 2)),
+            ),
+            (
+                TerrainGrid::distant(IVec2::new(-16, 2)),
+                TerrainGrid::horizon(IVec2::new(-5, 0)),
+            ),
+        ] {
+            let (finer_mesh, finer_water) = terrain.build_grid(finer);
+            let (coarser_mesh, coarser_water) = terrain.build_grid(coarser);
+            let (Some(Float32x3(finer_pos)), Some(Float32x3(coarser_pos))) = (
+                finer_mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+                coarser_mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            ) else {
+                panic!("both grids have positions");
+            };
+            for row in 0..=finer.cells {
+                let i = row * (finer.cells + 1);
+                let [x, y, z] = finer_pos[i];
+                let skip = (z - coarser.origin.y) / coarser.spacing;
+                let lower = skip.floor() as usize;
+                let upper = skip.ceil() as usize;
+                let at_edge = |j| j * (coarser.cells + 1) + coarser.cells;
+                let a = at_edge(lower);
+                let b = at_edge(upper);
+                let t = skip.fract();
+                assert_eq!(x, coarser_pos[a][0]);
+                assert!((y - lerp(coarser_pos[a][1], coarser_pos[b][1], t)).abs() < 1e-5);
+                let depth = lerp(coarser_water[a].depth, coarser_water[b].depth, t);
+                assert!((finer_water[i].depth - depth).abs() < 1e-5);
             }
         }
     }
