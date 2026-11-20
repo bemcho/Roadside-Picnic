@@ -14,6 +14,8 @@ pub const TERRAIN_GRASS_ARM: &str = "textures/terrain/grass_arm.jpg";
 pub const TERRAIN_EARTH_ALBEDO: &str = "textures/terrain/earth_albedo.jpg";
 pub const TERRAIN_EARTH_NORMAL: &str = "textures/terrain/earth_normal.jpg";
 pub const TERRAIN_EARTH_ARM: &str = "textures/terrain/earth_arm.jpg";
+pub const TREE_TALL: &str = "models/trees/tall_tree.glb";
+pub const TREE_ROADSIDE: &str = "models/trees/roadside_tree.glb";
 
 /// Root folder for textures and materials.
 #[expect(dead_code)]

@@ -1,9 +1,12 @@
 //! World environment: terrain, lighting, atmosphere, ambience.
 
 mod ambience;
+mod collision;
 mod terrain;
 mod terrain_material;
+mod trees;
 
+pub use collision::{Body, Collider, Pillar, push_out};
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 
 use bevy::light::atmosphere::ScatteringMedium;
@@ -32,15 +35,22 @@ struct WorldRoot;
 #[derive(Component)]
 struct Sun;
 
+/// Where the trees stand; computed once, spawned on each entry to the Zone.
+#[derive(Resource)]
+struct TreeSites(Vec<trees::TreeSite>);
+
 /// The terrain the stalker walks on.
 #[derive(Component)]
 struct Ground;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
+        let terrain = Terrain::new();
+        let tree_sites = trees::tree_sites(&terrain);
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
-            .insert_resource(Terrain::new())
-            .add_systems(OnEnter(AppState::InGame), spawn_world)
+            .insert_resource(TreeSites(tree_sites))
+            .insert_resource(terrain)
+            .add_systems(OnEnter(AppState::InGame), (spawn_world, spawn_forest))
             .add_systems(Update, prepare_ground_textures)
             .add_systems(OnExit(AppState::InGame), despawn_world);
     }
@@ -90,6 +100,16 @@ fn spawn_world(
             MeshMaterial3d(materials.add(load_terrain_material(&asset_server))),
         ));
     });
+}
+
+fn spawn_forest(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    tree_sites: Res<TreeSites>,
+) {
+    commands
+        .spawn((WorldRoot, Transform::default(), Visibility::default()))
+        .with_children(|forest| trees::spawn_trees(forest, &asset_server, &tree_sites.0));
 }
 
 fn despawn_world(mut commands: Commands, roots: Query<Entity, With<WorldRoot>>) {

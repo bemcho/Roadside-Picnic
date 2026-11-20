@@ -132,6 +132,24 @@ impl Terrain {
         Vec3::new(-hx, 1.0, -hz).normalize()
     }
 
+    /// How readily trees grow at `(x, z)`, from 0.0 (never) to 1.0: none on
+    /// the road, in the quarry, or on steep ground; few on the scorched hill.
+    pub fn woodland_at(&self, x: f32, z: f32) -> f32 {
+        let qdx = (x - QUARRY_CENTER.0) / QUARRY_RADII.0;
+        let qdz = (z - QUARRY_CENTER.1) / QUARRY_RADII.1;
+        let outside_quarry = smoothstep(1.1, 1.3, (qdx * qdx + qdz * qdz).sqrt());
+
+        let bdx = x - BALD_CENTER.0;
+        let bdz = z - BALD_CENTER.1;
+        let ash = (-(bdx * bdx + bdz * bdz) / (2.0 * BALD_SIGMA * BALD_SIGMA)).exp();
+
+        let normal = self.normal_at(x, z);
+        let flat_enough = smoothstep(0.7, 0.4, normal.xz().length() / normal.y);
+        let off_road = 1.0 - smoothstep(0.05, 0.3, self.road_mask(x, z));
+
+        outside_quarry * flat_enough * off_road * (1.0 - 0.85 * ash)
+    }
+
     /// Shader data, not a tint: exposed earth, wetness, ash, macro variation.
     fn surface_weights_at(&self, x: f32, z: f32, h: f32, slope: f32) -> [f32; 4] {
         let qdx = (x - QUARRY_CENTER.0) / QUARRY_RADII.0;
@@ -214,7 +232,7 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 /// Deterministic integer-lattice hash in `[0, 1)`.
-fn lattice_hash(ix: i32, iz: i32, seed: u32) -> f32 {
+pub(super) fn lattice_hash(ix: i32, iz: i32, seed: u32) -> f32 {
     let mut h = (ix as u32).wrapping_mul(0x8da6_b343)
         ^ (iz as u32).wrapping_mul(0xd816_3841)
         ^ seed.wrapping_mul(0xcb1a_b31f);
@@ -225,7 +243,7 @@ fn lattice_hash(ix: i32, iz: i32, seed: u32) -> f32 {
 }
 
 /// Bilinearly interpolated value noise in `[0, 1)`.
-fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
+pub(super) fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
     let ix = x.floor();
     let iz = z.floor();
     let fx = x - ix;

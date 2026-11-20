@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 
 use crate::states::AppState;
-use crate::world::Terrain;
+use crate::world::{Collider, Pillar, Terrain};
 
 pub struct ZonePlugin;
 
@@ -24,6 +24,10 @@ pub struct Artifact;
 /// A dangerous anomaly — deadly to touch.
 #[derive(Component)]
 pub struct Anomaly;
+
+/// Solid shapes of the placeholder artifact sphere and anomaly cylinder.
+const ARTIFACT_SHAPE: &[Pillar] = &[Pillar::centered(0.2, 0.4)];
+const ANOMALY_SHAPE: &[Pillar] = &[Pillar::centered(0.4, 1.2)];
 
 /// Root marker for everything spawned by this plugin's OnEnter.
 #[derive(Component)]
@@ -73,6 +77,7 @@ fn spawn_zone_objects(
         commands.entity(root).with_children(|zone| {
             zone.spawn((
                 Artifact,
+                Collider(ARTIFACT_SHAPE),
                 Mesh3d(meshes.add(Sphere::new(0.2))),
                 MeshMaterial3d(artifact_material.clone()),
                 Transform::from_xyz(x, y, z),
@@ -87,6 +92,7 @@ fn spawn_zone_objects(
         commands.entity(root).with_children(|zone| {
             zone.spawn((
                 Anomaly,
+                Collider(ANOMALY_SHAPE),
                 Mesh3d(meshes.add(Cylinder::new(0.4, 1.2))),
                 MeshMaterial3d(anomaly_material.clone()),
                 Transform::from_xyz(x, y, z),

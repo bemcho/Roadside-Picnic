@@ -14,11 +14,11 @@ use bevy::prelude::*;
 
 use crate::assets::MODELS;
 use crate::states::{AppState, InGamePhase};
-use crate::world::{SPAWN, TERRAIN_HALF_SIZE, Terrain};
+use crate::world::{Body, Collider, SPAWN, TERRAIN_HALF_SIZE, Terrain, push_out};
 
 use animation::{
     Gait, StalkerModel, animate_stalker, attach_stalker_animator, load_stalker_animations,
-    pause_stalker_animation, resume_stalker_animation,
+    pause_stalker_animation, pose_stalker_body, resume_stalker_animation,
 };
 use camera::{LOOK_HEIGHT, OrbitCamera, follow_player, grab_cursor_while_orbiting, orbit_camera};
 
@@ -33,12 +33,23 @@ const GRAVITY: f32 = 18.0;
 /// How far inside the terrain edge the stalker must stay.
 const EDGE_MARGIN: f32 = 2.0;
 
+/// The stalker's body for collision, standing and lying prone.
+const STANDING: Body = Body {
+    radius: 0.35,
+    height: 1.8,
+};
+const PRONE: Body = Body {
+    radius: 0.35,
+    height: 0.5,
+};
+
 /// The stalker. Movement speeds are data, not magic numbers in systems.
 #[derive(Component)]
 #[require(Locomotion)]
 pub struct Player {
     pub walk_speed: f32,
     pub run_speed: f32,
+    pub crawl_speed: f32,
     /// Take-off speed of a jump, in m/s.
     pub jump_speed: f32,
 }
@@ -48,6 +59,7 @@ impl Default for Player {
         Self {
             walk_speed: 1.8,
             run_speed: 4.5,
+            crawl_speed: 0.7,
             jump_speed: 5.0,
         }
     }
@@ -76,7 +88,13 @@ impl Plugin for PlayerPlugin {
             .add_systems(OnExit(AppState::InGame), despawn_player)
             .add_systems(
                 Update,
-                (orbit_camera, move_player, follow_player, animate_stalker)
+                (
+                    orbit_camera,
+                    move_player,
+                    follow_player,
+                    animate_stalker,
+                    pose_stalker_body,
+                )
                     .chain()
                     .run_if(in_state(InGamePhase::Running)),
             )
@@ -104,7 +122,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
         .id();
     commands
         .spawn((
-            StalkerModel { player },
+            StalkerModel::new(player),
             WorldAssetRoot(asset_server.load(format!("{MODELS}/stalker.glb#Scene0"))),
             Transform::from_scale(Vec3::splat(MODEL_SCALE)),
             ChildOf(player),
@@ -135,12 +153,13 @@ fn despawn_player(mut commands: Commands, player_entities: PlayerEntities) {
 }
 
 /// WASD movement relative to where the camera looks, Shift to run, Space to
-/// jump. The stalker turns to face the direction of travel and stays on the
-/// terrain surface unless airborne.
+/// jump, Ctrl to crawl. The stalker turns to face the direction of travel,
+/// bumps into solid models, and stays on the terrain surface unless airborne.
 fn move_player(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
+    colliders: Query<(&Collider, &GlobalTransform)>,
     cameras: Query<&OrbitCamera>,
     mut players: Query<(&Player, &mut Locomotion, &mut Transform)>,
 ) {
@@ -174,16 +193,23 @@ fn move_player(
         transform.rotation = transform.rotation.slerp(target, blend);
     }
 
-    let running = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let speed = if running {
+    let crawling =
+        locomotion.grounded && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let running = !crawling && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let speed = if crawling {
+        player.crawl_speed
+    } else if running {
         player.run_speed
     } else {
         player.walk_speed
     };
     let step = direction * speed * time.delta_secs();
-    let ground = ground_position(&terrain, transform.translation + step);
+    let target = transform.translation + step;
+    let body = if crawling { PRONE } else { STANDING };
+    let clear = push_out(target.xz(), target.y, body, colliders);
+    let ground = ground_position(&terrain, Vec3::new(clear.x, target.y, clear.y));
 
-    if locomotion.grounded && keys.just_pressed(KeyCode::Space) {
+    if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
         locomotion.vertical_speed = player.jump_speed;
     }
     let (y, vertical_speed, grounded) = fall(
@@ -196,11 +222,14 @@ fn move_player(
     transform.translation = Vec3::new(ground.x, y, ground.z);
     locomotion.vertical_speed = vertical_speed;
     locomotion.grounded = grounded;
-    locomotion.gait = match (grounded, direction != Vec3::ZERO, running) {
-        (false, _, _) => Gait::Jump,
-        (true, false, _) => Gait::Idle,
-        (true, true, false) => Gait::Walk,
-        (true, true, true) => Gait::Run,
+    let moving = direction != Vec3::ZERO;
+    locomotion.gait = match (grounded, crawling, moving, running) {
+        (false, ..) => Gait::Jump,
+        (true, true, false, _) => Gait::Prone,
+        (true, true, true, _) => Gait::Crawl,
+        (true, false, false, _) => Gait::Idle,
+        (true, false, true, false) => Gait::Walk,
+        (true, false, true, true) => Gait::Run,
     };
 }
 
@@ -333,5 +362,83 @@ mod tests {
     fn walking_downhill_stays_grounded() {
         let (y, vy, grounded) = fall(10.0, 0.0, true, 9.5, 1.0 / 60.0);
         assert_eq!((y, vy, grounded), (9.5, 0.0, true));
+    }
+
+    /// An app that runs [`move_player`] at 20 Hz for a stalker at (0, 0)
+    /// facing -Z, holding `keys`.
+    fn moving_app(keys: &[KeyCode]) -> (App, Entity) {
+        use std::time::Duration;
+
+        use bevy::time::TimeUpdateStrategy;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, move_player);
+        app.world_mut()
+            .spawn((Transform::default(), OrbitCamera::default()));
+        let player = app
+            .world_mut()
+            .spawn((
+                Player::default(),
+                Locomotion {
+                    grounded: true,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, Terrain::new().height_at(0.0, 0.0), 0.0),
+            ))
+            .id();
+        let mut input = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        for &key in keys {
+            input.press(key);
+        }
+        (app, player)
+    }
+
+    fn feet(app: &App, player: Entity) -> Vec3 {
+        app.world()
+            .get::<Transform>(player)
+            .expect("player")
+            .translation
+    }
+
+    #[test]
+    fn stalker_bumps_into_solid_models() {
+        use crate::world::Pillar;
+
+        const ROCK: &[Pillar] = &[Pillar::centered(0.4, 1.2)];
+        let (mut app, player) = moving_app(&[KeyCode::KeyW]);
+        let ground = Terrain::new().height_at(0.0, -5.0);
+        let rock = Transform::from_xyz(0.0, ground + 0.6, -5.0);
+        app.world_mut()
+            .spawn((Collider(ROCK), rock, GlobalTransform::from(rock)));
+        for _ in 0..100 {
+            app.update();
+            let distance = feet(&app, player).xz().distance(Vec2::new(0.0, -5.0));
+            assert!(distance >= 0.75 - 1e-4, "inside the rock, {distance} m off");
+        }
+        assert!(feet(&app, player).z > -5.0, "walked through the rock");
+    }
+
+    #[test]
+    fn ctrl_crawls_slowly_and_cannot_jump() {
+        let (mut app, player) = moving_app(&[KeyCode::ControlLeft, KeyCode::KeyW, KeyCode::Space]);
+        for _ in 0..40 {
+            app.update();
+        }
+        let locomotion = app.world().get::<Locomotion>(player).expect("locomotion");
+        assert_eq!(locomotion.gait, Gait::Crawl);
+        assert!(locomotion.grounded);
+        let travelled = feet(&app, player).xz().length();
+        let crawl_speed = Player::default().crawl_speed;
+        // The first update has no elapsed time.
+        assert!(
+            (travelled - crawl_speed * 39.0 * 0.05).abs() < 1e-3,
+            "{travelled} m"
+        );
     }
 }

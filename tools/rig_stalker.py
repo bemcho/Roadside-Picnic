@@ -1,4 +1,4 @@
-"""Auto-rig the unrigged Tripo stalker and bake Idle/Walk/Run/Jump clips.
+"""Auto-rig the unrigged Tripo stalker and bake Crawl/Idle/Walk/Run/Jump clips.
 
 Regenerates assets/models/stalker.glb from the raw Tripo export:
   blender -b --python tools/rig_stalker.py -- raw.glb rigged.glb
@@ -128,7 +128,8 @@ rest = {b.name: b.matrix_local.to_quaternion() for b in arm_data.bones}
 def rot(name, x=0.0, y=0.0, z=0.0):
     """Delta rotation in armature-rest axes (degrees) -> bone-local quaternion.
 
-    +X swings a hanging limb backward (front is -Y), -X forward.
+    +X swings a hanging limb backward (front is -Y), -X forward; it tips an
+    upright bone (spine, head) forward, -X back.
     """
     d = Matrix.Rotation(math.radians(z), 3, 'Z') @ Matrix.Rotation(math.radians(y), 3, 'Y') @ Matrix.Rotation(math.radians(x), 3, 'X')
     r = rest[name]
@@ -166,14 +167,14 @@ def gait(t, stride, knee_max, arm, elbow, lean, bob, twist):
         q[f'foot.{side}'] = rot(f'foot.{side}', x=-0.35 * knee + 8 * fwd)
         q[f'upper_arm.{side}'] = rot(f'upper_arm.{side}', x=arm * fwd)  # opposite leg
         q[f'forearm.{side}'] = rot(f'forearm.{side}', x=-elbow - 0.4 * elbow * max(0.0, -fwd))
-    q['spine'] = rot('spine', x=-lean * 0.5, z=twist * math.sin(p))
-    q['chest'] = rot('chest', x=-lean * 0.5, z=-1.5 * twist * math.sin(p))
-    q['head'] = rot('head', x=lean * 0.6)
+    q['spine'] = rot('spine', x=lean * 0.5, z=twist * math.sin(p))
+    q['chest'] = rot('chest', x=lean * 0.5, z=-1.5 * twist * math.sin(p))
+    q['head'] = rot('head', x=-lean * 0.6)
     q['_lift'] = -bob * math.sin(p) ** 2
     return q
 
-key('Walk', 30, lambda t: gait(t, stride=24, knee_max=40, arm=18, elbow=12, lean=4, bob=0.010, twist=4))
-key('Run', 20, lambda t: gait(t, stride=40, knee_max=85, arm=40, elbow=75, lean=14, bob=0.022, twist=7))
+key('Walk', 30, lambda t: gait(t, stride=24, knee_max=40, arm=18, elbow=12, lean=3, bob=0.010, twist=4))
+key('Run', 20, lambda t: gait(t, stride=40, knee_max=85, arm=40, elbow=75, lean=12, bob=0.022, twist=7))
 
 def idle(t):
     b = math.sin(TAU * t)
@@ -198,10 +199,32 @@ def jump(t):
         q[f'foot.{side}'] = rot(f'foot.{side}', x=-15 * s)
         q[f'upper_arm.{side}'] = rot(f'upper_arm.{side}', x=-50 * s, y=-15 * m * s)
         q[f'forearm.{side}'] = rot(f'forearm.{side}', x=-50 * s)
-    q['spine'] = rot('spine', x=-8 * s)
-    q['head'] = rot('head', x=6 * s)
+    q['spine'] = rot('spine', x=8 * s)
+    q['head'] = rot('head', x=-6 * s)
     return q
 key('Jump', 15, jump, loop=False)
+
+def crawl(t):
+    """Commando crawl, posed standing: the game pitches the body face-down.
+
+    "Overhead" is ahead along the ground; each arm reaches while the leg on
+    the same side straightens and the opposite knee draws up the side.
+    """
+    p = TAU * t
+    q = {}
+    for side, ph, m in (('L', 0.0, 1), ('R', math.pi, -1)):
+        reach = math.sin(p + ph)                # 1: arm stretched ahead
+        draw = 0.5 * (1 - reach)                # 1: knee drawn up
+        q[f'upper_arm.{side}'] = rot(f'upper_arm.{side}', x=-(115 + 35 * reach), y=-m * 20)
+        q[f'forearm.{side}'] = rot(f'forearm.{side}', x=-(70 - 45 * reach))
+        q[f'thigh.{side}'] = rot(f'thigh.{side}', x=-40 * draw, y=-m * (8 + 30 * draw))
+        q[f'shin.{side}'] = rot(f'shin.{side}', x=5 + 80 * draw)
+    q['spine'] = rot('spine', x=-4, z=5 * math.sin(p))
+    q['chest'] = rot('chest', z=-5 * math.sin(p))
+    q['neck'] = rot('neck', x=-20)
+    q['head'] = rot('head', x=-35)
+    return q
+key('Crawl', 40, crawl)
 
 # Rest pose as the default.
 for pb in rig.pose.bones:

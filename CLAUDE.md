@@ -15,6 +15,7 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 
 - **WASD** — walk (camera-relative); hold **Shift** to run
 - **Space** — jump
+- **Ctrl** (hold) — crawl prone
 - **Right mouse drag** — orbit the camera; **mouse wheel** — zoom
 - **Esc** — pause / resume
 - **Q** — quit
@@ -26,12 +27,24 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   bald hill, a marshy lowland, and a dirt road to the quarry rim. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
   in other plugins.
+- **Trees** (`src/world/trees.rs`): stands of dead trunks (`assets/models/trees/*.glb`)
+  scattered deterministically on a jittered grid, weighted by `Terrain::woodland_at`
+  (off-road, outside the quarry, flat-ish, sparse on the bald hill). Source GLBs are
+  dioramas on a dirt plinth: decimate with gltf-transform (`weld`, `simplify`, `resize`;
+  no meshopt/Draco), then trim the plinth with `tools/trim_tree_base.py`, which also
+  regenerates the model's collision pillars in `src/world/tree_pillars/<name>.rs`.
+  Re-run it whenever a model changes.
+- **Collision** (`src/world/collision.rs`): every solid model carries a `Collider`, a
+  set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
+  of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed
+  under (crawling body is 0.5 m). Give every new solid model a `Collider`.
 - **Ambience** (`src/world/ambience.rs`) is synthesized at startup into a single looping
   WAV (wind, drone, birds, distant moans/pings) — no audio files in the repo.
 - **Stalker model** (`assets/models/stalker.glb`) is a Tripo mesh auto-rigged in headless
-  Blender by `tools/rig_stalker.py`, which also bakes the Idle/Jump/Run/Walk clips (glTF
-  animation indices 0–3, sorted by name). `src/player/animation.rs` cross-fades them by
-  `Gait`. Edit motion in the script and regenerate rather than hand-editing the GLB.
+  Blender by `tools/rig_stalker.py`, which also bakes the Crawl/Idle/Jump/Run/Walk clips
+  (glTF animation indices 0–4, sorted by name). `src/player/animation.rs` cross-fades
+  them by `Gait` and pitches the body face-down while crawling (the Crawl clip is posed
+  standing). Edit motion in the script and regenerate rather than hand-editing the GLB.
 - **Sky & lighting** (`src/world/mod.rs`) use Bevy's physical `Atmosphere` with a `SunDisk`
   lit at `lux::RAW_SUNLIGHT`; the camera runs HDR at `Exposure { ev100: 13.0 }`. Tune light
   and emissive values in physical units for that exposure, and steer the look with `SUN_DIRECTION`
