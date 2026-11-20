@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Load the Bevy skill first
+
+For any game development, debugging, or playtesting request in this checkout, load the
+`bevy-game-dev` skill as the first action if it is not already loaded. The checkout
+itself is the trigger: a request like "the ground still looks flat" need not mention
+Bevy, Roadside-Picnic, or the skill by name.
+
+If the skill is missing from discovery, read
+`~/Projects/agentic/agentic-tooling/skills/bevy-game-dev/SKILL.md` if available.
+If neither is available, continue with the project guidance below.
+
 ## Project Overview
 
 **Roadside-Picnic** is a sci-fi game built in Rust with the [Bevy](https://bevyengine.org) game engine.
