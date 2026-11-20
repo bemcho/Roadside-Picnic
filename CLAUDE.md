@@ -13,7 +13,9 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 
 ## Controls
 
-- **WASD** — move
+- **WASD** — walk (camera-relative); hold **Shift** to run
+- **Space** — jump
+- **Right mouse drag** — orbit the camera; **mouse wheel** — zoom
 - **Esc** — pause / resume
 - **Q** — quit
 
@@ -26,6 +28,14 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   in other plugins.
 - **Ambience** (`src/world/ambience.rs`) is synthesized at startup into a single looping
   WAV (wind, drone, birds, distant moans/pings) — no audio files in the repo.
+- **Stalker model** (`assets/models/stalker.glb`) is a Tripo mesh auto-rigged in headless
+  Blender by `tools/rig_stalker.py`, which also bakes the Idle/Jump/Run/Walk clips (glTF
+  animation indices 0–3, sorted by name). `src/player/animation.rs` cross-fades them by
+  `Gait`. Edit motion in the script and regenerate rather than hand-editing the GLB.
+- **Sky & lighting** (`src/world/mod.rs`) use Bevy's physical `Atmosphere` with a `SunDisk`
+  lit at `lux::RAW_SUNLIGHT`; the camera runs HDR at `Exposure { ev100: 13.0 }`. Tune light
+  and emissive values in physical units for that exposure, and steer the look with `SUN_DIRECTION`
+  and `HAZE` rather than adding ambient light or distance fog.
 
 ## Build & Run Commands
 

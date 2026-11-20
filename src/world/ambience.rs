@@ -21,6 +21,10 @@ const SAMPLE_RATE: u32 = 22_050;
 /// Loop length in seconds.
 const DURATION_SECS: u32 = 150;
 
+/// Target loudness of the mix (RMS, about -18 dBFS): clearly audible at
+/// ordinary system volumes while leaving headroom for the soft clipper.
+const TARGET_RMS: f32 = 0.125;
+
 /// Deterministic PRNG so the ambience is reproducible.
 struct XorShift64(u64);
 
@@ -62,11 +66,13 @@ pub fn synth_ambience_wav() -> Arc<[u8]> {
         mix[n - 1 - i] *= g;
     }
 
-    // Soft clip and encode to 16-bit PCM.
+    // Normalize, soft clip, and encode to 16-bit PCM.
+    let rms = (mix.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
+    let gain = if rms > 0.0 { TARGET_RMS / rms } else { 1.0 };
     let mut wav = Vec::with_capacity(44 + n * 2);
     write_wav_header(&mut wav, n as u32);
     for sample in &mix {
-        let y = (*sample * 1.4).tanh() * 0.75;
+        let y = (*sample * gain).tanh() * 0.95;
         wav.extend_from_slice(&((y * i16::MAX as f32) as i16).to_le_bytes());
     }
     Arc::from(wav)
@@ -274,13 +280,16 @@ mod tests {
     }
 
     #[test]
-    fn ambience_is_not_silent() {
+    fn ambience_is_loud_enough_to_hear() {
         let wav = synth_ambience_wav();
-        let mut peak = 0i16;
-        for chunk in wav[44..].chunks_exact(2) {
-            let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-            peak = peak.max(s.abs());
-        }
-        assert!(peak > 1000, "ambience is too quiet: peak {peak}");
+        let samples: Vec<f32> = wav[44..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| i16::from_le_bytes(c) as f32 / i16::MAX as f32)
+            .collect();
+        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        // Between -24 and -14 dBFS: audible without clipping into distortion.
+        assert!((0.063..0.2).contains(&rms), "ambience RMS {rms}");
     }
 }

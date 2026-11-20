@@ -13,6 +13,9 @@ use bevy::prelude::*;
 /// World-space extent of the terrain, in units, centered on the origin.
 const SIZE: f32 = 300.0;
 
+/// Distance from the origin to each terrain edge along X and Z.
+pub const HALF_SIZE: f32 = SIZE / 2.0;
+
 /// Number of grid cells per side (vertices = cells + 1).
 const CELLS: usize = 300;
 

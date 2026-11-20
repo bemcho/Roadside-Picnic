@@ -4,13 +4,21 @@ mod ambience;
 mod terrain;
 mod terrain_material;
 
-pub use terrain::{SPAWN, Terrain};
+pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 
+use bevy::light::atmosphere::ScatteringMedium;
+use bevy::light::{Atmosphere, SunDisk, light_consts::lux};
 use bevy::prelude::*;
 
 use crate::states::AppState;
 
 use terrain_material::{TerrainMaterial, load_terrain_material, prepare_ground_textures};
+
+/// Direction toward the sun: late afternoon, ahead of the stalker's start.
+const SUN_DIRECTION: Vec3 = Vec3::new(-0.35, 0.19, -1.0);
+
+/// Atmosphere density relative to Earth; thicker air reads as Zone haze.
+const HAZE: f32 = 2.5;
 
 /// Spawns the base world (terrain, sun, ambience) when entering the Zone,
 /// and tears it down when leaving.
@@ -32,11 +40,6 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .insert_resource(Terrain::new())
-            .insert_resource(GlobalAmbientLight {
-                color: Color::srgb(0.62, 0.66, 0.58),
-                brightness: 120.0,
-                ..default()
-            })
             .add_systems(OnEnter(AppState::InGame), spawn_world)
             .add_systems(Update, prepare_ground_textures)
             .add_systems(OnExit(AppState::InGame), despawn_world);
@@ -50,6 +53,7 @@ fn spawn_world(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainMaterial>>,
     mut sources: ResMut<Assets<AudioSource>>,
+    mut mediums: ResMut<Assets<ScatteringMedium>>,
 ) {
     let root = commands
         .spawn((WorldRoot, Transform::default(), Visibility::default()))
@@ -59,16 +63,25 @@ fn spawn_world(
     let ambience_entity = ambience::spawn_ambience(&mut commands, &mut sources);
     commands.entity(root).add_child(ambience_entity);
 
+    // Earth-like sky, thickened so the Zone sits in a dusty haze.
+    let medium = mediums.add(ScatteringMedium::earth(256, 256).with_density_multiplier(HAZE));
+    let atmosphere = Atmosphere::earth(medium);
+    let planet_center = Transform::from_xyz(0.0, -atmosphere.inner_radius, 0.0);
+
     commands.entity(root).with_children(|world| {
-        // Sun: low and hazy, as it always is over the Zone.
+        world.spawn((atmosphere, planet_center));
+
+        // Sun: low over the hills ahead of the stalker. Raw (unscattered)
+        // sunlight is the input the atmosphere expects.
         world.spawn((
             Sun,
             DirectionalLight {
-                illuminance: 9_000.0,
+                illuminance: lux::RAW_SUNLIGHT,
                 shadow_maps_enabled: true,
                 ..default()
             },
-            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, -0.8, 0.0)),
+            SunDisk::EARTH,
+            Transform::from_translation(SUN_DIRECTION).looking_at(Vec3::ZERO, Vec3::Y),
         ));
 
         world.spawn((
