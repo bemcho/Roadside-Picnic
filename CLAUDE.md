@@ -16,6 +16,7 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 - **WASD** — walk (camera-relative); hold **Shift** to run
 - **Space** — jump
 - **Ctrl** (hold) — crawl prone
+- **E** — enter or exit the armored vehicle; **W/S** to accelerate/reverse, **A/D** to steer, **Space** to brake
 - **Right mouse drag** — orbit the camera; **mouse wheel** — zoom
 - **Esc** — pause / resume
 - **Q** — quit
@@ -45,6 +46,10 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   pad at `terrain::BASE` on the south edge. Runs start at `SPAWN` inside it, and a
   `Respawn` message (sent when the stalker touches an anomaly) brings them back there.
   Its pillars come from `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
+- **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
+  independent wheel pivots. `tools/prepare_vehicle_asset.py` rebuilds the GLB with
+  UVs and embedded material maps from four reference sheets. Regenerate
+  `src/world/pillars/armored_vehicle.rs` with `tools/trim_tree_base.py` after mesh changes.
 - **Collision** (`src/world/collision.rs`): every solid model carries a `Collider`, a
   set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
   of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed

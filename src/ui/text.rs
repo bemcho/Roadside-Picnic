@@ -7,7 +7,10 @@
 pub const HUD_TITLE: &str = "THE ZONE";
 
 /// Hint shown in the HUD corner.
-pub const HUD_CONTROLS_HINT: &str = "WASD — move | ESC — pause | Q — quit";
+pub const HUD_CONTROLS_HINT: &str = "WASD: move | ESC: pause | Q: quit";
+pub const HUD_DRIVER_CONTROLS: &str = "W/S: accelerate/reverse | A/D: steer | SPACE: brake";
+pub const HUD_ENTER_VEHICLE: &str = "Press E to enter vehicle";
+pub const HUD_EXIT_VEHICLE: &str = "Press E to exit vehicle";
 
 /// Title shown in the pause menu.
 pub const PAUSE_TITLE: &str = "PAUSED";

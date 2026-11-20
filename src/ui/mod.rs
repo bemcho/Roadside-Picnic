@@ -7,6 +7,10 @@ pub mod text;
 
 use bevy::prelude::*;
 
+use crate::player::{
+    Locomotion, Player,
+    vehicle::{Driving, Vehicle, can_enter_vehicle},
+};
 use crate::states::{AppState, InGamePhase};
 use crate::zone::ZoneRun;
 
@@ -20,6 +24,12 @@ struct UiRoot;
 #[derive(Component)]
 struct HudStats;
 
+#[derive(Component)]
+struct VehiclePrompt;
+
+#[derive(Component)]
+struct HudControls;
+
 /// Root marker for the pause menu overlay.
 #[derive(Component)]
 struct PauseMenuRoot;
@@ -32,6 +42,10 @@ impl Plugin for UiPlugin {
                 Update,
                 update_hud_stats.run_if(in_state(InGamePhase::Running)),
             )
+            .add_systems(
+                PostUpdate,
+                update_vehicle_prompt.run_if(in_state(AppState::InGame)),
+            )
             .add_systems(OnEnter(InGamePhase::Paused), spawn_pause_menu)
             .add_systems(OnExit(InGamePhase::Paused), despawn_pause_menu);
     }
@@ -39,7 +53,14 @@ impl Plugin for UiPlugin {
 
 fn spawn_hud(mut commands: Commands) {
     let root = commands
-        .spawn((UiRoot, Transform::default(), Visibility::default()))
+        .spawn((
+            UiRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ))
         .id();
 
     commands.entity(root).with_children(|hud| {
@@ -78,6 +99,7 @@ fn spawn_hud(mut commands: Commands) {
 
         // Bottom-left corner: controls hint.
         hud.spawn((
+            HudControls,
             Text::new(text::HUD_CONTROLS_HINT),
             TextFont {
                 font_size: FontSize::Px(16.0),
@@ -88,6 +110,23 @@ fn spawn_hud(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(12.0),
                 left: Val::Px(12.0),
+                ..default()
+            },
+        ));
+
+        hud.spawn((
+            VehiclePrompt,
+            Text::default(),
+            TextFont {
+                font_size: FontSize::Px(22.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.97, 0.9, 0.66)),
+            TextLayout::justify(Justify::Center),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                bottom: Val::Percent(14.0),
                 ..default()
             },
         ));
@@ -106,6 +145,44 @@ fn update_hud_stats(run: Res<ZoneRun>, mut stats: Query<&mut Text, With<HudStats
         return;
     };
     **text = text::hud_zone_stats(run.artifacts_collected, run.anomalies_triggered);
+}
+
+fn update_vehicle_prompt(
+    phase: Res<State<InGamePhase>>,
+    player: Query<(&Transform, &Locomotion, Option<&Driving>), With<Player>>,
+    vehicles: Query<&Transform, With<Vehicle>>,
+    mut prompts: Query<&mut Text, (With<VehiclePrompt>, Without<HudControls>)>,
+    mut controls: Query<&mut Text, With<HudControls>>,
+) {
+    let (Ok((feet, locomotion, driving)), Ok(mut prompt), Ok(mut controls)) =
+        (player.single(), prompts.single_mut(), controls.single_mut())
+    else {
+        return;
+    };
+    let driving = driving.is_some();
+    let hint = if *phase.get() == InGamePhase::Paused {
+        ""
+    } else if driving {
+        text::HUD_EXIT_VEHICLE
+    } else if vehicles
+        .iter()
+        .any(|at| can_enter_vehicle(locomotion, at, feet.translation))
+    {
+        text::HUD_ENTER_VEHICLE
+    } else {
+        ""
+    };
+    let controls_hint = if driving {
+        text::HUD_DRIVER_CONTROLS
+    } else {
+        text::HUD_CONTROLS_HINT
+    };
+    if prompt.0 != hint {
+        prompt.0 = hint.to_owned();
+    }
+    if controls.0 != controls_hint {
+        controls.0 = controls_hint.to_owned();
+    }
 }
 
 fn spawn_pause_menu(mut commands: Commands) {

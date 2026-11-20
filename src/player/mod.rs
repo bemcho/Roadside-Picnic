@@ -2,6 +2,7 @@
 
 mod animation;
 mod camera;
+pub(crate) mod vehicle;
 
 use std::f32::consts::PI;
 
@@ -21,6 +22,7 @@ use animation::{
     pause_stalker_animation, pose_stalker_body, resume_stalker_animation,
 };
 use camera::{LOOK_HEIGHT, OrbitCamera, follow_player, grab_cursor_while_orbiting, orbit_camera};
+use vehicle::{Driver, Driving, Vehicle, drive_vehicle, interact_vehicle, pose_wheels};
 
 pub struct PlayerPlugin;
 
@@ -45,7 +47,7 @@ const PRONE: Body = Body {
 
 /// The stalker. Movement speeds are data, not magic numbers in systems.
 #[derive(Component)]
-#[require(Locomotion)]
+#[require(Locomotion, Visibility)]
 pub struct Player {
     pub walk_speed: f32,
     pub run_speed: f32,
@@ -96,7 +98,10 @@ impl Plugin for PlayerPlugin {
                 (
                     orbit_camera,
                     respawn_player,
+                    interact_vehicle,
                     move_player,
+                    drive_vehicle,
+                    pose_wheels,
                     follow_player,
                     animate_stalker,
                     pose_stalker_body,
@@ -134,7 +139,6 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
                 ..default()
             },
             start,
-            Visibility::default(),
         ))
         .id();
     commands
@@ -174,15 +178,24 @@ fn despawn_player(mut commands: Commands, player_entities: PlayerEntities) {
 
 /// Puts the stalker back at the base, standing, with the camera behind.
 fn respawn_player(
+    mut commands: Commands,
     mut respawns: MessageReader<Respawn>,
     terrain: Res<Terrain>,
-    mut players: Query<(&mut Transform, &mut Locomotion), With<Player>>,
+    mut players: Driver,
+    mut vehicles: Query<&mut Vehicle>,
     mut cameras: Query<&mut OrbitCamera>,
 ) {
     if respawns.read().count() == 0 {
         return;
     }
-    for (mut transform, mut locomotion) in &mut players {
+    for (entity, mut transform, mut locomotion, mut visibility, driving) in &mut players {
+        if let Some(driving) = driving {
+            if let Ok(mut vehicle) = vehicles.get_mut(driving.0) {
+                vehicle.park();
+            }
+            commands.entity(entity).remove::<Driving>();
+            *visibility = Visibility::Inherited;
+        }
         *transform = spawn_transform(&terrain);
         *locomotion = Locomotion {
             grounded: true,
@@ -203,7 +216,7 @@ fn move_player(
     terrain: Res<Terrain>,
     colliders: Query<(&Collider, &GlobalTransform)>,
     cameras: Query<&OrbitCamera>,
-    mut players: Query<(&Player, &mut Locomotion, &mut Transform)>,
+    mut players: Query<(&Player, &mut Locomotion, &mut Transform), Without<Driving>>,
 ) {
     let Ok((player, mut locomotion, mut transform)) = players.single_mut() else {
         return;

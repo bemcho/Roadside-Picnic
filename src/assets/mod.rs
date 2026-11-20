@@ -19,6 +19,7 @@ pub const FAUNA_OVERGROWTH: &str = "models/fauna/overgrowth.glb";
 pub const FAUNA_MUD_BOG: &str = "models/fauna/mud_bog.glb";
 pub const FAUNA_SLIME_DITCH: &str = "models/fauna/slime_ditch.glb";
 pub const BASE_YARD: &str = "models/base/warehouse.glb";
+pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
 pub const BASE_CONCRETE_ALBEDO: &str = "textures/base/concrete_albedo.jpg";
 pub const BASE_CONCRETE_NORMAL: &str = "textures/base/concrete_normal.jpg";
 pub const BASE_CONCRETE_ARM: &str = "textures/base/concrete_arm.jpg";

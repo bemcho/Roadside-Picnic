@@ -10,7 +10,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use crate::states::InGamePhase;
 use crate::world::Terrain;
 
-use super::Player;
+use super::{Player, vehicle::Driving};
 
 /// Height above the stalker's feet the camera orbits around and looks at.
 pub(super) const LOOK_HEIGHT: f32 = 1.6;
@@ -90,17 +90,18 @@ pub(super) fn orbit_camera(
 /// Places the camera on its orbit and keeps it from sinking into hillsides.
 pub(super) fn follow_player(
     terrain: Res<Terrain>,
-    players: Query<&Transform, (With<Player>, Without<OrbitCamera>)>,
+    players: Query<(&Transform, Option<&Driving>), With<Player>>,
     mut cameras: Query<(&OrbitCamera, &mut Transform), Without<Player>>,
 ) {
-    let Ok(player) = players.single() else {
+    let Ok((player, driving)) = players.single() else {
         return;
     };
     let Ok((orbit, mut camera)) = cameras.single_mut() else {
         return;
     };
 
-    let focus = player.translation + Vec3::Y * LOOK_HEIGHT;
+    let height = if driving.is_some() { 2.1 } else { LOOK_HEIGHT };
+    let focus = player.translation + Vec3::Y * height;
     let mut position = focus + orbit.offset();
     let floor = terrain.height_at(position.x, position.z) + GROUND_CLEARANCE;
     position.y = position.y.max(floor);

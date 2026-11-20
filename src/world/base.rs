@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::assets;
+use crate::player::vehicle::{parked_vehicle, spawn_vehicle};
 
 use super::WorldRoot;
 use super::collision::{Collider, Pillar};
@@ -193,6 +194,12 @@ pub(super) fn spawn_base(
         Collider(YARD),
         ChildOf(hall),
     ));
+    let vehicle = spawn_vehicle(
+        &mut commands,
+        &asset_server,
+        parked_vehicle(Vec3::new(BASE.0, floor, BASE.1)),
+    );
+    commands.entity(vehicle).insert(WorldRoot);
 
     let paints = Paints::new(&asset_server, &mut materials, &mut images);
     let mut builder = Builder {
@@ -533,6 +540,7 @@ fn hazard_stripes() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::player::vehicle::{blocked, vehicle_distance};
     use crate::world::{Body, push_out};
 
     #[test]
@@ -556,6 +564,29 @@ mod tests {
             Vec2::new(DOOR_HALF_WIDTH - 1.0, HALF_DEPTH),
         ] {
             assert_eq!(push(door), door, "door blocked at {door}");
+        }
+    }
+
+    #[test]
+    fn parked_vehicle_can_drive_straight_out_without_blocking_the_spawn() {
+        let walls = Collider(WALLS.as_slice());
+        let hall = GlobalTransform::IDENTITY;
+        let yard = Collider(YARD);
+        let at = GlobalTransform::from(
+            Transform::from_xyz(0.0, 0.0, YARD_OFFSET).with_scale(Vec3::splat(YARD_SCALE)),
+        );
+        let mut vehicle = parked_vehicle(Vec3::ZERO);
+        let forward = vehicle.rotation * Vec3::Z;
+        for z in [crate::world::SPAWN.1 - BASE.1, HALF_DEPTH] {
+            assert!(vehicle_distance(&vehicle, Vec3::new(0.0, 0.0, z)) > 0.35);
+        }
+        while vehicle.translation.z <= HALF_DEPTH + 3.0 {
+            assert!(
+                !blocked(&vehicle, [(&walls, &hall), (&yard, &at)].into_iter()),
+                "vehicle blocked at {}",
+                vehicle.translation
+            );
+            vehicle.translation += forward * 0.2;
         }
     }
 }

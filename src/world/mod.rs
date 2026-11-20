@@ -7,6 +7,7 @@ mod terrain;
 mod terrain_material;
 mod trees;
 
+pub(crate) use collision::STEP_HEIGHT;
 pub use collision::{Body, Collider, Pillar, push_out};
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 
