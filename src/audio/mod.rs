@@ -12,7 +12,7 @@ use crate::player::{
     Gait, Locomotion, Player,
     vehicle::{Driving, Vehicle},
 };
-use crate::states::{AppState, InGamePhase};
+use crate::states::{AppState, InGamePhase, SplashPhase};
 
 const SAMPLE_RATE: u32 = 22_050;
 
@@ -36,6 +36,8 @@ impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AudioMode>()
             .add_systems(Startup, load_sounds)
+            .add_systems(OnEnter(AppState::Loading), start_hangar_audio)
+            .add_systems(OnEnter(SplashPhase::Ready), play_ready_signal)
             .add_systems(OnEnter(AppState::InGame), start_ambience)
             .add_systems(
                 Last,
@@ -64,6 +66,34 @@ struct Ambience;
 
 #[derive(Component)]
 struct Engine;
+
+fn start_hangar_audio(
+    mut commands: Commands,
+    mut bank: ResMut<Assets<AudioSource>>,
+    mode: Res<AudioMode>,
+) {
+    commands.spawn((
+        AudioPlayer(bank.add(AudioSource {
+            bytes: effects::hangar(),
+        })),
+        mode.settings(PlaybackSettings::LOOP),
+        DespawnOnExit(AppState::Loading),
+    ));
+}
+
+fn play_ready_signal(
+    mut commands: Commands,
+    mut bank: ResMut<Assets<AudioSource>>,
+    mode: Res<AudioMode>,
+) {
+    commands.spawn((
+        AudioPlayer(bank.add(AudioSource {
+            bytes: effects::ready_signal(),
+        })),
+        mode.settings(PlaybackSettings::DESPAWN),
+        DespawnOnExit(AppState::Loading),
+    ));
+}
 
 fn load_sounds(mut commands: Commands, mut bank: ResMut<Assets<AudioSource>>) {
     let mut clip = |bytes| bank.add(AudioSource { bytes });

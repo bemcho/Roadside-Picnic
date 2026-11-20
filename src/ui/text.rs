@@ -3,6 +3,11 @@
 //! Kept in one place so they can move into a localization table later.
 //! Systems must use these instead of inline string literals.
 
+pub const SPLASH_TITLE: &str = "ROADSIDE PICNIC";
+pub const SPLASH_LOADING: &str = "Loading the Zone...";
+pub const SPLASH_READY: &str = "Press any key to continue";
+pub const SPLASH_FAILED: &str = "Could not load the Zone. Close the game and try again.";
+
 /// Title shown in the HUD corner.
 pub const HUD_TITLE: &str = "THE ZONE";
 

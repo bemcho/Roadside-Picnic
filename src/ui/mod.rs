@@ -3,6 +3,7 @@
 //! All player-facing text lives in [`text`] as localization-ready constants —
 //! never hardcode display strings in systems.
 
+mod splash;
 pub mod text;
 
 use bevy::prelude::*;
@@ -37,7 +38,8 @@ struct PauseMenuRoot;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::InGame), spawn_hud)
+        app.add_plugins(splash::SplashPlugin)
+            .add_systems(OnEnter(AppState::InGame), spawn_hud)
             .add_systems(OnExit(AppState::InGame), despawn_hud)
             .add_systems(
                 Update,

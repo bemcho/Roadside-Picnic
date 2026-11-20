@@ -1,12 +1,12 @@
 //! Tiling ground layers, blended in world space by the terrain shader.
 
-use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::{ImageAddressMode, ImageSampler};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, TextureFormat};
 use bevy::shader::ShaderRef;
 
-use crate::assets;
+use crate::assets::{self, load_repeating};
 
 pub(super) type TerrainMaterial = ExtendedMaterial<StandardMaterial, GroundLayers>;
 
@@ -35,26 +35,6 @@ impl MaterialExtension for GroundLayers {
     fn deferred_fragment_shader() -> ShaderRef {
         assets::TERRAIN_SHADER.into()
     }
-}
-
-/// Loads a tiling texture: repeating, anisotropically filtered.
-pub(super) fn load_repeating(
-    server: &AssetServer,
-    path: &'static str,
-    is_srgb: bool,
-) -> Handle<Image> {
-    server
-        .load_builder()
-        .with_settings(move |settings: &mut ImageLoaderSettings| {
-            settings.is_srgb = is_srgb;
-            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                anisotropy_clamp: 8,
-                ..ImageSamplerDescriptor::linear()
-            });
-        })
-        .load(path)
 }
 
 pub(super) fn load_terrain_material(server: &AssetServer) -> TerrainMaterial {

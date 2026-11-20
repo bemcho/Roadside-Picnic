@@ -9,11 +9,20 @@ use bevy::prelude::*;
 /// Global game states. Never model state with boolean resources.
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum AppState {
-    /// Bootstrapping: future home of asset preloading before entering the Zone.
+    /// Hangar splash while assets load and until the player continues.
     #[default]
     Loading,
     /// Inside the Zone. Gameplay sub-states live in [`InGamePhase`].
     InGame,
+}
+
+#[derive(SubStates, Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[source(AppState = AppState::Loading)]
+pub(crate) enum SplashPhase {
+    #[default]
+    Loading,
+    Ready,
+    Failed,
 }
 
 /// Sub-states of [`AppState::InGame`].
@@ -28,16 +37,6 @@ pub enum InGamePhase {
     Running,
     /// Pause menu overlay on top of the Zone.
     Paused,
-}
-
-/// Advances the app out of [`AppState::Loading`] into [`AppState::InGame`].
-///
-/// Placeholder for real asset preloading: once assets actually need loading,
-/// those gates go here before the state transition.
-pub fn advance_loading(state: Res<State<AppState>>, mut next_state: ResMut<NextState<AppState>>) {
-    if *state.get() == AppState::Loading {
-        next_state.set(AppState::InGame);
-    }
 }
 
 /// Toggles [`InGamePhase`] between `Running` and `Paused` on Escape.

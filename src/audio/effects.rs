@@ -11,6 +11,36 @@ fn render(duration: f32, mut sample: impl FnMut(f32) -> f32) -> Arc<[u8]> {
     )
 }
 
+pub fn hangar() -> Arc<[u8]> {
+    const LOOP: f32 = 8.0;
+    let mut rng = XorShift64::new(0xFA60_1A12);
+    let (mut low, mut air) = (0.0, 0.0);
+    render(LOOP, |t| {
+        let white = rng.next_f32() * 2.0 - 1.0;
+        low += (white - low) * 0.04;
+        air += (white - air) * 0.18;
+        let phase = TAU * t;
+        let hum = (phase * 52.0).sin() * 0.055
+            + (phase * 104.0).sin() * 0.032
+            + (phase * 157.0).sin() * 0.018;
+        let fan = (air * 0.24 + low * 0.31) * (0.78 + (phase * 1.5).sin() * 0.14);
+        hum + fan * (t.min(LOOP - t) * 10.0).min(1.0)
+    })
+}
+
+pub fn ready_signal() -> Arc<[u8]> {
+    render(0.55, |t| {
+        let ping = |start: f32, freq: f32| {
+            let age = (t - start).max(0.0);
+            let phase = TAU * freq * age;
+            (phase.sin() + 0.25 * (phase * 2.0).sin())
+                * (age / 0.015).min(1.0)
+                * (-age * 13.0).exp()
+        };
+        (ping(0.0, 393.0) * 0.17 + ping(0.11, 523.0) * 0.15) * ((0.55 - t) * 20.0).min(1.0)
+    })
+}
+
 pub fn step(seed: u64, duration: f32, pitch: f32, gain: f32) -> Arc<[u8]> {
     let mut rng = XorShift64::new(seed);
     let mut low = 0.0;

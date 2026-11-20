@@ -13,7 +13,7 @@ use bevy::pbr::AtmosphereSettings;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 
-use crate::assets::MODELS;
+use crate::assets::STALKER_MODEL;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{Body, Collider, SPAWN, TERRAIN_HALF_SIZE, Terrain, push_out};
 
@@ -145,7 +145,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
     commands
         .spawn((
             StalkerModel::new(player),
-            WorldAssetRoot(asset_server.load(format!("{MODELS}/stalker.glb#Scene0"))),
+            WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(STALKER_MODEL))),
             Transform::from_scale(Vec3::splat(MODEL_SCALE)),
             ChildOf(player),
         ))

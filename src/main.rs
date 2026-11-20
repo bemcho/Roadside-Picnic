@@ -12,8 +12,9 @@ mod zone;
 
 use bevy::prelude::*;
 
+use assets::{PreloadedAssets, preload_game_assets};
 use player::PlayerPlugin;
-use states::{AppState, InGamePhase, advance_loading, toggle_pause};
+use states::{AppState, InGamePhase, SplashPhase, toggle_pause};
 use ui::UiPlugin;
 use world::WorldPlugin;
 use zone::ZonePlugin;
@@ -22,7 +23,10 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .init_state::<AppState>()
+        .add_sub_state::<SplashPhase>()
         .add_sub_state::<InGamePhase>()
+        .init_resource::<PreloadedAssets>()
+        .add_systems(Startup, preload_game_assets)
         .add_plugins((
             audio::GameAudioPlugin,
             WorldPlugin,
@@ -30,9 +34,8 @@ fn main() {
             ZonePlugin,
             UiPlugin,
         ))
-        .add_systems(Update, advance_loading.run_if(in_state(AppState::Loading)))
         .add_systems(Update, toggle_pause.run_if(in_state(AppState::InGame)))
-        .add_systems(Update, quit_on_q)
+        .add_systems(Update, quit_on_q.run_if(in_state(AppState::InGame)))
         .run();
 }
 

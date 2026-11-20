@@ -7,16 +7,16 @@
 use std::f32::consts::FRAC_PI_2;
 use std::sync::LazyLock;
 
+use bevy::light::{EnvironmentMapLight, LightProbe};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 
-use crate::assets;
+use crate::assets::{self, load_repeating};
 use crate::player::vehicle::{parked_vehicle, spawn_vehicle};
 
 use super::WorldRoot;
 use super::collision::{Collider, Pillar};
 use super::terrain::{BASE, Terrain};
-use super::terrain_material::load_repeating;
 
 /// Hall footprint and height in meters, around [`BASE`]. The door is in the
 /// north (+Z) wall.
@@ -30,6 +30,7 @@ const DOOR_HEIGHT: f32 = 9.0;
 /// The floor sits a hair above the levelled pad so no terrain shows through.
 const FLOOR_LIFT: f32 = 0.02;
 const SLAB_DEPTH: f32 = 0.6;
+const CONCRETE_REPEAT: f32 = 11.0;
 
 /// Bays between the columns and roof trusses, along the hall.
 const BAY: f32 = 6.0;
@@ -102,9 +103,9 @@ impl Paints {
                 metallic,
             )
         };
-        let glowing = |nits: f32| StandardMaterial {
+        let glowing = |color: LinearRgba, nits: f32| StandardMaterial {
             base_color: Color::WHITE,
-            emissive: LinearRgba::rgb(1.0, 0.95, 0.85) * nits,
+            emissive: color * nits,
             ..default()
         };
         Self {
@@ -112,9 +113,9 @@ impl Paints {
                 assets::BASE_CONCRETE_ALBEDO,
                 assets::BASE_CONCRETE_NORMAL,
                 assets::BASE_CONCRETE_ARM,
-                Color::srgb(1.12, 1.10, 1.06),
-                0.86,
-                0.12,
+                Color::WHITE,
+                0.82,
+                0.0,
             )),
             panels: materials.add(surface(
                 assets::BASE_WALL_ALBEDO,
@@ -128,8 +129,8 @@ impl Paints {
             yellow: materials.add(trim(assets::BASE_YELLOW_ALBEDO, 0.95, 0.08)),
             hazard: materials.add(trim(assets::BASE_HAZARD_ALBEDO, 0.96, 0.1)),
             grate: materials.add(trim(assets::BASE_GRATE_ALBEDO, 0.82, 0.72)),
-            skylight: materials.add(glowing(6_000.0)),
-            bulb: materials.add(glowing(60_000.0)),
+            skylight: materials.add(glowing(LinearRgba::rgb(0.77, 0.86, 1.0), 2_800.0)),
+            bulb: materials.add(glowing(LinearRgba::rgb(1.0, 0.90, 0.75), 38_000.0)),
         }
     }
 }
@@ -167,6 +168,7 @@ pub(super) fn spawn_base(
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let floor = terrain.height_at(BASE.0, BASE.1) + FLOOR_LIFT;
     let hall = commands
@@ -190,6 +192,7 @@ pub(super) fn spawn_base(
         parked_vehicle(Vec3::new(BASE.0, floor, BASE.1)),
     );
     commands.entity(vehicle).insert(WorldRoot);
+    spawn_hall_probe(&mut commands, hall, &mut images);
 
     let paints = Paints::new(&asset_server, &mut materials);
     let mut builder = Builder {
@@ -201,18 +204,46 @@ pub(super) fn spawn_base(
     spawn_frame(&mut builder, &paints);
     spawn_crane(&mut builder, &paints);
     spawn_lamps(&mut builder, &paints);
+    spawn_wall_lamps(&mut builder, &paints);
     spawn_markings(&mut builder, &paints);
+}
+
+fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<Image>) {
+    // Replace the outdoor sky bounce only within the walls, easing out at the door.
+    commands.spawn((
+        LightProbe {
+            falloff: Vec3::new(0.0, 0.0, 0.075),
+        },
+        EnvironmentMapLight::hemispherical_gradient(
+            images,
+            Color::linear_rgb(0.79, 0.87, 1.0),
+            Color::linear_rgb(0.62, 0.68, 0.76),
+            Color::linear_rgb(0.25, 0.26, 0.30),
+        )
+        .with_intensity(1_500.0),
+        Transform::from_xyz(0.0, HEIGHT / 2.0 - 0.15, 0.0).with_scale(Vec3::new(
+            2.0 * HALF_WIDTH,
+            HEIGHT + 0.3,
+            2.0 * HALF_DEPTH,
+        )),
+        ChildOf(hall),
+    ));
 }
 
 /// Floor slab and apron, walls with the door opening, and the roof.
 fn spawn_shell(b: &mut Builder, paints: &Paints) {
     let (w, d) = (HALF_WIDTH, HALF_DEPTH);
     let slab = Vec3::new(2.0 * w + 1.0, SLAB_DEPTH, 2.0 * d + 1.0);
-    b.block(slab, 3.0, &paints.concrete, Vec3::Y * -SLAB_DEPTH / 2.0);
+    b.block(
+        slab,
+        CONCRETE_REPEAT,
+        &paints.concrete,
+        Vec3::Y * -SLAB_DEPTH / 2.0,
+    );
     let apron = Vec3::new(2.0 * DOOR_HALF_WIDTH + 4.0, SLAB_DEPTH, 6.0);
     b.block(
         apron,
-        3.0,
+        CONCRETE_REPEAT,
         &paints.concrete,
         Vec3::new(0.0, -SLAB_DEPTH / 2.0, d + 3.0),
     );
@@ -388,40 +419,88 @@ fn spawn_crane(b: &mut Builder, paints: &Paints) {
 
 /// Pendant lamps hanging from the trusses, each lighting a pool of floor.
 fn spawn_lamps(b: &mut Builder, paints: &Paints) {
-    let chord = HEIGHT - 1.6;
+    let chord = HEIGHT - 1.75;
     let lamp_y = 8.4;
-    for x in [-9.0, 0.0, 9.0] {
-        for z in [-11.0, 1.0, 13.0] {
-            let cord = Cylinder::new(0.02, chord - lamp_y);
-            b.add(
-                cord.into(),
+    for (x, z) in [
+        (0.0, 12.0),
+        (-9.0, 6.0),
+        (9.0, 6.0),
+        (0.0, 0.0),
+        (-8.0, -12.0),
+        (8.0, -12.0),
+    ] {
+        b.add(
+            Cylinder::new(0.02, chord - lamp_y).into(),
+            &paints.steel,
+            Transform::from_xyz(x, (chord + lamp_y) / 2.0, z),
+        );
+        b.add(
+            Cone::new(0.5, 0.4).into(),
+            &paints.steel,
+            Transform::from_xyz(x, lamp_y, z),
+        );
+        b.add(
+            Cylinder::new(0.4, 0.02).into(),
+            &paints.bulb,
+            Transform::from_xyz(x, lamp_y - 0.2, z),
+        );
+        let light = Vec3::new(x, lamp_y - 0.26, z);
+        b.commands.spawn((
+            SpotLight {
+                color: Color::srgb(1.0, 0.95, 0.86),
+                intensity: 2.0e7,
+                range: 15.0,
+                radius: 0.36,
+                outer_angle: 0.60,
+                inner_angle: 0.27,
+                shadow_maps_enabled: z == 12.0,
+                ..default()
+            },
+            Transform::from_translation(light).looking_at(light - Vec3::Y, Vec3::Z),
+            ChildOf(b.hall),
+        ));
+    }
+}
+
+/// Warm service lights pull the corners and the sides of the doorway out of shadow.
+fn spawn_wall_lamps(b: &mut Builder, paints: &Paints) {
+    for side in [-1.0, 1.0] {
+        for (x, z, floor_x, floor_z) in [
+            (15.6, -15.0, 15.0, -13.9),
+            (15.6, 14.0, 15.0, 13.0),
+            (8.4, 17.7, 7.3, 15.5),
+        ] {
+            let mount = Vec3::new(side * x, 4.1, z);
+            let bracket = if x > DOOR_HALF_WIDTH + 4.0 {
+                Vec3::X * side * (HALF_WIDTH - x)
+            } else {
+                Vec3::Z * (HALF_DEPTH - z)
+            };
+            b.block(
+                bracket.abs() + Vec3::splat(0.12),
+                0.6,
                 &paints.steel,
-                Transform::from_xyz(x, (chord + lamp_y) / 2.0, z),
+                mount + bracket * 0.5,
             );
-            b.add(
-                Cone::new(0.5, 0.4).into(),
-                &paints.steel,
-                Transform::from_xyz(x, lamp_y, z),
-            );
-            let bulb = Cylinder::new(0.4, 0.02);
-            b.add(
-                bulb.into(),
+            b.block(Vec3::new(0.68, 0.18, 0.36), 0.75, &paints.steel, mount);
+            b.block(
+                Vec3::new(0.57, 0.025, 0.26),
+                0.6,
                 &paints.bulb,
-                Transform::from_xyz(x, lamp_y - 0.2, z),
+                mount - Vec3::Y * 0.1,
             );
-            let light = Vec3::new(x, lamp_y - 0.25, z);
             b.commands.spawn((
                 SpotLight {
-                    color: Color::srgb(1.0, 0.93, 0.8),
-                    intensity: 3.0e7,
-                    range: 30.0,
-                    radius: 0.4,
-                    outer_angle: 1.0,
-                    inner_angle: 0.6,
-                    shadow_maps_enabled: false,
+                    color: Color::srgb(1.0, 0.81, 0.61),
+                    intensity: 3.8e6,
+                    range: 7.8,
+                    radius: 0.18,
+                    outer_angle: 0.56,
+                    inner_angle: 0.20,
                     ..default()
                 },
-                Transform::from_translation(light).looking_at(light - Vec3::Y, Vec3::Z),
+                Transform::from_translation(mount - Vec3::Y * 0.15)
+                    .looking_at(Vec3::new(side * floor_x, 0.0, floor_z), Vec3::Z),
                 ChildOf(b.hall),
             ));
         }

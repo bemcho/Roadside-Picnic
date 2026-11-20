@@ -24,6 +24,7 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
 
 ## Controls
 
+- **Any key** — enter the Zone from the hangar splash once loading finishes
 - **WASD** — walk (camera-relative); hold **Shift** to run
 - **Space** — jump
 - **Ctrl** (hold) — crawl prone
@@ -63,8 +64,9 @@ Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dr
   `Respawn` message (sent when the stalker touches an anomaly) brings them back there.
   Seat the imported catwalk feet and floor props with `tools/ground_warehouse.py`
   before regenerating its pillars with `tools/trim_tree_base.py ... - 0 src/world/pillars/warehouse.rs`.
-  `tools/prepare_hangar_textures.py` derives the slab, panels, steel, and trim
-  textures from the four supplied hangar reference boards.
+  `tools/prepare_hangar_textures.py` bakes seamless gray concrete and derives
+  panel, steel, and trim textures from the four hangar reference boards.
+  A local light probe keeps the interior dim; pendants and wall lights light the floor in pools.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots. `tools/prepare_vehicle_asset.py` rebuilds the GLB with
   UVs and embedded material maps from four reference sheets. Regenerate

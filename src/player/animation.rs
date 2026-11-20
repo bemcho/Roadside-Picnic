@@ -7,7 +7,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
 
-use crate::assets::MODELS;
+use crate::assets::{PreloadedAssets, STALKER_MODEL};
 
 /// How the stalker is moving; selects the animation clip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,12 +97,15 @@ pub(super) fn load_stalker_animations(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut preloaded: ResMut<PreloadedAssets>,
 ) {
-    let path = format!("{MODELS}/stalker.glb");
-    let (graph, nodes) = AnimationGraph::from_clips(
-        (0..CLIPS.len())
-            .map(|i| asset_server.load(GltfAssetLabel::Animation(i).from_asset(path.clone()))),
-    );
+    let clips: [_; CLIPS.len()] = std::array::from_fn(|i| {
+        asset_server.load::<AnimationClip>(GltfAssetLabel::Animation(i).from_asset(STALKER_MODEL))
+    });
+    preloaded
+        .0
+        .extend(clips.iter().cloned().map(Handle::untyped));
+    let (graph, nodes) = AnimationGraph::from_clips(clips);
     commands.insert_resource(StalkerAnimations {
         graph: graphs.add(graph),
         nodes: CLIPS.into_iter().zip(nodes).collect(),

@@ -7,6 +7,12 @@
 //! the project's forward-looking contract for asset locations. When a module
 //! starts using one, the compiler will demand the attribute be removed.
 
+use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::prelude::*;
+use bevy::shader::Shader;
+
+pub const SPLASH_HANGAR: &str = "textures/splash/hangar.png";
+pub const STALKER_MODEL: &str = "models/stalker.glb";
 pub const TERRAIN_SHADER: &str = "shaders/terrain.wesl";
 pub const TERRAIN_GRASS_ALBEDO: &str = "textures/terrain/grass_albedo.png";
 pub const TERRAIN_GRASS_NORMAL: &str = "textures/terrain/grass_normal.png";
@@ -37,9 +43,6 @@ pub const BASE_GRATE_ALBEDO: &str = "textures/base/grate_albedo.png";
 #[expect(dead_code)]
 pub const TEXTURES: &str = "textures";
 
-/// Root folder for 3D models (the stalker lives here as `models/stalker.glb`).
-pub const MODELS: &str = "models";
-
 /// Root folder for audio files.
 #[expect(dead_code)]
 pub const AUDIO: &str = "audio";
@@ -47,3 +50,75 @@ pub const AUDIO: &str = "audio";
 /// Root folder for fonts.
 #[expect(dead_code)]
 pub const FONTS: &str = "fonts";
+
+#[derive(Resource, Default)]
+pub(crate) struct PreloadedAssets(pub Vec<UntypedHandle>);
+
+pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<PreloadedAssets>) {
+    let scenes = [
+        STALKER_MODEL,
+        BASE_YARD,
+        BASE_VEHICLE,
+        FAUNA_DEAD_FOREST,
+        FAUNA_OVERGROWTH,
+        FAUNA_MUD_BOG,
+        FAUNA_SLIME_DITCH,
+    ];
+    let albedo = [
+        TERRAIN_GRASS_ALBEDO,
+        TERRAIN_EARTH_ALBEDO,
+        BASE_CONCRETE_ALBEDO,
+        BASE_WALL_ALBEDO,
+        BASE_STEEL_ALBEDO,
+        BASE_YELLOW_ALBEDO,
+        BASE_HAZARD_ALBEDO,
+        BASE_GRATE_ALBEDO,
+    ];
+    let data_maps = [
+        TERRAIN_GRASS_NORMAL,
+        TERRAIN_GRASS_SURFACE,
+        TERRAIN_EARTH_NORMAL,
+        TERRAIN_EARTH_SURFACE,
+        BASE_CONCRETE_NORMAL,
+        BASE_CONCRETE_ARM,
+        BASE_WALL_NORMAL,
+        BASE_WALL_ARM,
+        BASE_STEEL_NORMAL,
+        BASE_STEEL_ARM,
+    ];
+    assets.0.extend(scenes.map(|path| {
+        server
+            .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
+            .untyped()
+    }));
+    assets
+        .0
+        .extend(albedo.map(|path| load_repeating(&server, path, true).untyped()));
+    assets
+        .0
+        .extend(data_maps.map(|path| load_repeating(&server, path, false).untyped()));
+    assets.0.extend([
+        server.load::<Image>(SPLASH_HANGAR).untyped(),
+        server.load::<Shader>(TERRAIN_SHADER).untyped(),
+    ]);
+}
+
+/// Loads a tiling texture: repeating, anisotropically filtered.
+pub(crate) fn load_repeating(
+    server: &AssetServer,
+    path: &'static str,
+    is_srgb: bool,
+) -> Handle<Image> {
+    server
+        .load_builder()
+        .with_settings(move |settings: &mut ImageLoaderSettings| {
+            settings.is_srgb = is_srgb;
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                anisotropy_clamp: 8,
+                ..ImageSamplerDescriptor::linear()
+            });
+        })
+        .load(path)
+}
