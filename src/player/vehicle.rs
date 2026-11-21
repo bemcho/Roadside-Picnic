@@ -21,6 +21,7 @@ const MAX_STEER: f32 = 0.48;
 const FAST_STEER: f32 = 0.27;
 const LOW_RANGE_SPEED: f32 = 10.0;
 const FORWARD_SPEED: f32 = 16.0;
+const ROAD_FORWARD_SPEED: f32 = 24.0;
 const REVERSE_SPEED: f32 = 4.0;
 const WHEELBASE: f32 = 2.8;
 const DRIVE_STEP: f32 = 0.025;
@@ -45,6 +46,7 @@ pub(crate) struct Vehicle {
     slide: Vec2,
     vertical_speed: f32,
     grounded: bool,
+    road: f32,
     suspension: [Vec3; 4],
 }
 
@@ -58,6 +60,7 @@ impl Default for Vehicle {
             slide: Vec2::ZERO,
             vertical_speed: 0.0,
             grounded: true,
+            road: 0.0,
             suspension: [Vec3::ZERO; 4],
         }
     }
@@ -99,7 +102,7 @@ impl Vehicle {
         let scale = if self.speed < 0.0 {
             LOW_RANGE_SPEED
         } else {
-            FORWARD_SPEED
+            FORWARD_SPEED + (ROAD_FORWARD_SPEED - FORWARD_SPEED) * self.road
         };
         (self.speed.abs() / scale).min(1.0)
     }
@@ -486,7 +489,13 @@ fn apply_traction(
     input: DriveInput,
     dt: f32,
 ) {
-    apply_drive_controls(vehicle, input, terrain.water_depth_at(at.x, at.y), dt);
+    apply_drive_controls(
+        vehicle,
+        input,
+        terrain.water_depth_at(at.x, at.y),
+        terrain.road_mask(at.x, at.y),
+        dt,
+    );
 
     let downhill = up.xz();
     if downhill.length() > MAX_GRIP_GRADE * up.y && downhill.dot(forward.xz()) * vehicle.speed < 0.0
@@ -499,7 +508,7 @@ fn apply_traction(
         .clamp_length_max(12.0);
 }
 
-fn apply_drive_controls(vehicle: &mut Vehicle, input: DriveInput, depth: f32, dt: f32) {
+fn apply_drive_controls(vehicle: &mut Vehicle, input: DriveInput, depth: f32, road: f32, dt: f32) {
     let reversing = input.throttle * vehicle.speed < 0.0;
     let pedal = if input.brake || reversing {
         0.0
@@ -514,8 +523,10 @@ fn apply_drive_controls(vehicle: &mut Vehicle, input: DriveInput, depth: f32, dt
     let water = depth.min(FORD_DEPTH);
     // Drop to the original speed range in wadable water.
     let wading = (water / 0.25).clamp(0.0, 1.0);
+    vehicle.road = road.clamp(0.0, 1.0);
+    let dry_speed = FORWARD_SPEED + (ROAD_FORWARD_SPEED - FORWARD_SPEED) * vehicle.road;
     let top_speed = if pedal >= 0.0 {
-        FORWARD_SPEED + (LOW_RANGE_SPEED - FORWARD_SPEED) * wading
+        dry_speed + (LOW_RANGE_SPEED - dry_speed) * wading
     } else {
         REVERSE_SPEED
     };
@@ -648,21 +659,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn faster_top_speed_does_not_increase_high_speed_yaw_or_ford_speed() {
+    fn road_boost_preserves_steering_ford_limits_and_reverse_speed() {
         let forward = DriveInput {
             throttle: 1.0,
             steering: 1.0,
             brake: false,
         };
         let mut dry = Vehicle::default();
+        let mut road = Vehicle::default();
         let mut ford = Vehicle::default();
         for _ in 0..250 {
-            apply_drive_controls(&mut dry, forward, 0.0, 0.02);
-            apply_drive_controls(&mut ford, forward, 0.32, 0.02);
+            apply_drive_controls(&mut dry, forward, 0.0, 0.0, 0.02);
+            apply_drive_controls(&mut road, forward, 0.0, 1.0, 0.02);
+            apply_drive_controls(&mut ford, forward, 0.32, 1.0, 0.02);
         }
         assert!((15.9..=16.0).contains(&dry.speed));
+        assert!((23.9..=24.0).contains(&road.speed));
         assert!((8.0..8.2).contains(&ford.speed));
-        let turn_rate = dry.steer.tan() * dry.speed / WHEELBASE;
+        assert!((0.99..=1.0).contains(&road.engine_load()));
+        let turn_rate = road.steer.tan() * road.speed / WHEELBASE;
         assert!((0.85..1.0).contains(&turn_rate));
 
         let mut reverse = Vehicle::default();
@@ -674,10 +689,34 @@ mod tests {
                     ..forward
                 },
                 0.0,
+                1.0,
                 0.02,
             );
         }
         assert!((-4.0..-3.95).contains(&reverse.speed));
+    }
+
+    #[test]
+    fn live_terrain_road_mask_selects_the_faster_forward_speed() {
+        let terrain = Terrain::new();
+        let off_road = Vec2::new(40.0, -128.0);
+        let road = Vec2::new(39.0, -68.0);
+        assert!(terrain.road_mask(off_road.x, off_road.y) < 0.05);
+        assert!(terrain.road_mask(road.x, road.y) > 0.99);
+
+        let input = DriveInput {
+            throttle: 1.0,
+            steering: 0.0,
+            brake: false,
+        };
+        let mut dirt = Vehicle::default();
+        let mut paved = Vehicle::default();
+        for _ in 0..250 {
+            apply_traction(&mut dirt, &terrain, off_road, Vec3::Z, Vec3::Y, input, 0.02);
+            apply_traction(&mut paved, &terrain, road, Vec3::Z, Vec3::Y, input, 0.02);
+        }
+        assert!((15.9..=16.0).contains(&dirt.speed));
+        assert!((23.9..=24.0).contains(&paved.speed));
     }
 
     #[test]
@@ -728,7 +767,7 @@ mod tests {
             ..turn
         };
         for _ in 0..25 {
-            apply_drive_controls(&mut parked, turn_in_place, 0.0, 0.02);
+            apply_drive_controls(&mut parked, turn_in_place, 0.0, 0.0, 0.02);
         }
         assert!(parked.steer > 0.44, "lost low-speed steering lock");
     }
@@ -745,11 +784,11 @@ mod tests {
             steering: 0.0,
             brake: false,
         };
-        apply_drive_controls(&mut vehicle, reverse, 0.0, 0.02);
+        apply_drive_controls(&mut vehicle, reverse, 0.0, 0.0, 0.02);
         assert!(vehicle.speed > 4.7);
         let mut stopped = false;
         for _ in 0..54 {
-            apply_drive_controls(&mut vehicle, reverse, 0.0, 0.02);
+            apply_drive_controls(&mut vehicle, reverse, 0.0, 0.0, 0.02);
             stopped |= vehicle.speed == 0.0;
         }
         assert!(stopped && vehicle.speed < -1.0);
@@ -758,10 +797,10 @@ mod tests {
             brake: true,
             ..reverse
         };
-        apply_drive_controls(&mut vehicle, brake, 0.0, 0.02);
+        apply_drive_controls(&mut vehicle, brake, 0.0, 0.0, 0.02);
         assert!(vehicle.speed - pre_brake >= 0.35);
         for _ in 0..20 {
-            apply_drive_controls(&mut vehicle, brake, 0.0, 0.02);
+            apply_drive_controls(&mut vehicle, brake, 0.0, 0.0, 0.02);
         }
         assert_eq!(vehicle.speed, 0.0);
     }

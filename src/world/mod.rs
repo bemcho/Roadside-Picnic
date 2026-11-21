@@ -4,6 +4,7 @@ mod base;
 mod canopy;
 mod collision;
 mod cordon;
+mod ground_fog;
 mod hydrology;
 mod landscape;
 mod plants;
@@ -17,14 +18,16 @@ mod trees;
 mod water;
 mod wildlife;
 
+pub(crate) use base::ArtifactDisplay;
 pub(crate) use collision::STEP_HEIGHT;
 pub use collision::{Body, Collider, Pillar, push_out};
+pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
 
 use bevy::camera::visibility::VisibilityRange;
 use bevy::light::atmosphere::ScatteringMedium;
-use bevy::light::{Atmosphere, SunDisk, light_consts::lux};
+use bevy::light::{Atmosphere, SunDisk, VolumetricLight, light_consts::lux};
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use bevy::world_serialization::WorldInstanceReady;
@@ -87,6 +90,7 @@ impl Plugin for WorldPlugin {
             (
                 (canopy::prepare_canopy_materials, spawn_world).chain(),
                 spawn_sky,
+                ground_fog::spawn_ground_fog,
                 base::spawn_base,
                 plants::prepare_plant_materials,
                 tree_fall::start_break_clock,
@@ -96,6 +100,17 @@ impl Plugin for WorldPlugin {
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
+        .add_systems(
+            Update,
+            (
+                ground_fog::follow_ground_fog,
+                ground_fog::follow_terrain_fog,
+                ground_fog::update_distance_fog,
+                ground_fog::scroll_ground_fog,
+            )
+                .chain()
+                .run_if(in_state(InGamePhase::Running)),
+        )
         .add_systems(
             PreUpdate,
             (stream_scenery, stream_ground_detail, cordon::stream_cordon)
@@ -114,6 +129,8 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PostUpdate,
             (
+                plants::stream_full_bushes,
+                base::stream_full_artifacts,
                 base::animate_artifacts,
                 tree_fall::animate_falling_trees,
                 tree_fall::pick_tree_to_break,
@@ -221,6 +238,7 @@ fn spawn_sky(mut commands: Commands, mut mediums: ResMut<Assets<ScatteringMedium
                     ..default()
                 },
                 SunDisk::EARTH,
+                VolumetricLight,
                 Transform::from_translation(SUN_DIRECTION).looking_at(Vec3::ZERO, Vec3::Y),
             ));
         });

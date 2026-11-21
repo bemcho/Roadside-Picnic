@@ -12,6 +12,8 @@ use super::roads::RoadNetwork;
 
 pub(super) type TerrainMaterial = ExtendedMaterial<StandardMaterial, GroundLayers>;
 
+const FOG_SETTINGS_EPSILON: f32 = 0.25;
+
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(super) struct GroundLayers {
     #[texture(100)]
@@ -31,6 +33,8 @@ pub(super) struct GroundLayers {
     road_surface: Handle<Image>,
     #[uniform(108)]
     road_bounds: Vec4,
+    #[uniform(109)]
+    fog_settings: Vec4,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -52,6 +56,8 @@ pub(super) fn load_terrain_material(
     let (road_surface, road_bounds) = roads.surface_texture();
     TerrainMaterial {
         base: StandardMaterial {
+            // The terrain shader applies distance fog with a low-ground mask.
+            fog_enabled: false,
             perceptual_roughness: 1.0,
             ..default()
         },
@@ -64,7 +70,27 @@ pub(super) fn load_terrain_material(
             earth_surface: load(assets::TERRAIN_EARTH_SURFACE, false),
             road_surface: images.add(road_surface),
             road_bounds,
+            fog_settings: Vec4::ZERO,
         },
+    }
+}
+
+pub(super) fn update_terrain_fog_settings(
+    materials: &mut Assets<TerrainMaterial>,
+    handle: &Handle<TerrainMaterial>,
+    fog_top: f32,
+    fog_height: f32,
+) {
+    let Some(material) = materials.get(handle) else {
+        return;
+    };
+    if (material.extension.fog_settings.x - fog_top).abs() < FOG_SETTINGS_EPSILON
+        && (material.extension.fog_settings.y - fog_height).abs() < FOG_SETTINGS_EPSILON
+    {
+        return;
+    }
+    if let Some(mut material) = materials.get_mut(handle) {
+        material.extension.fog_settings = Vec4::new(fog_top, fog_height, 0.0, 0.0);
     }
 }
 

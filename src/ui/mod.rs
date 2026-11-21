@@ -15,7 +15,10 @@ use crate::player::{
     vehicle::{Driving, Vehicle, can_enter_vehicle},
 };
 use crate::states::{AppState, InGamePhase};
+use crate::world::ArtifactDisplay;
 use crate::zone::ZoneRun;
+
+const ARTIFACT_READ_RANGE: f32 = 3.2;
 
 pub struct UiPlugin;
 
@@ -36,6 +39,15 @@ struct VehiclePrompt;
 #[derive(Component)]
 struct HudControls;
 
+#[derive(Component)]
+struct ArtifactReadout;
+
+#[derive(Component)]
+struct ArtifactReadoutTitle;
+
+#[derive(Component)]
+struct ArtifactReadoutDescription;
+
 /// Root marker for the pause menu overlay.
 #[derive(Component)]
 struct PauseMenuRoot;
@@ -52,7 +64,7 @@ impl Plugin for UiPlugin {
             .add_systems(Update, update_fps.run_if(in_state(AppState::InGame)))
             .add_systems(
                 PostUpdate,
-                update_vehicle_prompt.run_if(in_state(AppState::InGame)),
+                (update_vehicle_prompt, update_artifact_readout).run_if(in_state(AppState::InGame)),
             )
             .add_systems(OnEnter(InGamePhase::Paused), spawn_pause_menu)
             .add_systems(OnExit(InGamePhase::Paused), despawn_pause_menu);
@@ -158,6 +170,60 @@ fn spawn_hud(mut commands: Commands) {
                 ..default()
             },
         ));
+
+        hud.spawn((
+            ArtifactReadout,
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(24.0),
+                top: Val::Percent(18.0),
+                width: Val::Percent(52.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(Val::Px(18.0), Val::Px(14.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BorderColor::all(Color::srgb(0.66, 0.52, 0.30)),
+            BackgroundColor(Color::srgba(0.025, 0.035, 0.042, 0.94)),
+        ))
+        .with_children(|readout| {
+            readout.spawn((
+                Text::new(text::ARTIFACT_READOUT_LABEL),
+                TextLayout::justify(Justify::Center),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.72, 0.76, 0.78)),
+            ));
+            readout.spawn((
+                ArtifactReadoutTitle,
+                Text::default(),
+                TextLayout::justify(Justify::Center),
+                TextFont {
+                    font_size: FontSize::Px(24.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.98, 0.80, 0.34)),
+            ));
+            readout.spawn((
+                ArtifactReadoutDescription,
+                Text::default(),
+                TextLayout::justify(Justify::Center),
+                TextFont {
+                    font_size: FontSize::Px(17.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.90, 0.90, 0.84)),
+                Node {
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+            ));
+        });
     });
 }
 
@@ -229,6 +295,62 @@ fn update_vehicle_prompt(
     }
 }
 
+fn update_artifact_readout(
+    phase: Res<State<InGamePhase>>,
+    player: Query<&Transform, With<Player>>,
+    exhibits: Query<(&ArtifactDisplay, &GlobalTransform)>,
+    mut visibility: Single<&mut Visibility, With<ArtifactReadout>>,
+    mut title: Single<
+        &mut Text,
+        (
+            With<ArtifactReadoutTitle>,
+            Without<ArtifactReadoutDescription>,
+        ),
+    >,
+    mut description: Single<
+        &mut Text,
+        (
+            With<ArtifactReadoutDescription>,
+            Without<ArtifactReadoutTitle>,
+        ),
+    >,
+) {
+    let selected = if *phase.get() == InGamePhase::Running {
+        player
+            .single()
+            .ok()
+            .and_then(|at| nearest_artifact(at.translation.xz(), exhibits.iter()))
+    } else {
+        None
+    };
+
+    if let Some(copy) = selected.and_then(|index| text::ARTIFACT_COPY.get(index)) {
+        if title.0 != copy.title {
+            title.0 = copy.title.to_owned();
+        }
+        if description.0 != copy.description {
+            description.0 = copy.description.to_owned();
+        }
+        visibility.set_if_neq(Visibility::Inherited);
+    } else {
+        visibility.set_if_neq(Visibility::Hidden);
+    }
+}
+
+fn nearest_artifact<'a>(
+    at: Vec2,
+    exhibits: impl IntoIterator<Item = (&'a ArtifactDisplay, &'a GlobalTransform)>,
+) -> Option<usize> {
+    exhibits
+        .into_iter()
+        .filter_map(|(display, pose)| {
+            let distance = at.distance(pose.translation().xz());
+            (distance <= ARTIFACT_READ_RANGE).then_some((distance, display.index))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, index)| index)
+}
+
 fn spawn_pause_menu(mut commands: Commands) {
     let root = commands
         .spawn((PauseMenuRoot, Transform::default(), Visibility::default()))
@@ -291,6 +413,7 @@ fn despawn_pause_menu(mut commands: Commands, roots: Query<Entity, With<PauseMen
 mod tests {
     use std::time::Duration;
 
+    use bevy::state::app::StatesPlugin;
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
@@ -313,5 +436,107 @@ mod tests {
             .single(world)
             .expect("one FPS counter in the HUD");
         assert_eq!(line.0, "FPS: 25");
+    }
+
+    #[test]
+    fn nearest_artifact_only_selects_the_closest_exhibit_in_range() {
+        let mut world = World::new();
+        for (index, at) in [
+            (3, Vec2::new(1.0, 0.0)),
+            (7, Vec2::new(2.5, 0.0)),
+            (9, Vec2::new(8.0, 0.0)),
+        ] {
+            world.spawn((
+                ArtifactDisplay { index },
+                GlobalTransform::from_xyz(at.x, 0.0, at.y),
+            ));
+        }
+        let mut query = world.query::<(&ArtifactDisplay, &GlobalTransform)>();
+        assert_eq!(
+            nearest_artifact(Vec2::new(2.1, 0.0), query.iter(&world)),
+            Some(7)
+        );
+        assert_eq!(
+            nearest_artifact(Vec2::new(20.0, 0.0), query.iter(&world)),
+            None
+        );
+    }
+
+    #[test]
+    fn artifact_readout_tracks_proximity_and_hides_while_paused() {
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin)
+            .init_state::<AppState>()
+            .add_sub_state::<InGamePhase>()
+            .add_systems(Update, update_artifact_readout);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::InGame);
+        app.update();
+        app.update();
+
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        app.world_mut().spawn((
+            ArtifactDisplay { index: 1 },
+            GlobalTransform::from_xyz(2.0, 0.0, 0.0),
+        ));
+        let readout = app
+            .world_mut()
+            .spawn((ArtifactReadout, Visibility::Hidden))
+            .id();
+        let title = app
+            .world_mut()
+            .spawn((ArtifactReadoutTitle, Text::default()))
+            .id();
+        let description = app
+            .world_mut()
+            .spawn((ArtifactReadoutDescription, Text::default()))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Visibility>(readout),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Text>(title).expect("title").0,
+            text::ARTIFACT_COPY[1].title
+        );
+        assert_eq!(
+            app.world().get::<Text>(description).expect("description").0,
+            text::ARTIFACT_COPY[1].description
+        );
+
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player")
+            .translation = Vec3::X * 20.0;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(readout),
+            Some(&Visibility::Hidden)
+        );
+
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player")
+            .translation = Vec3::ZERO;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(readout),
+            Some(&Visibility::Inherited)
+        );
+        app.world_mut()
+            .resource_mut::<NextState<InGamePhase>>()
+            .set(InGamePhase::Paused);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(readout),
+            Some(&Visibility::Hidden)
+        );
     }
 }

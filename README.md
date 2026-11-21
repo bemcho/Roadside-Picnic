@@ -21,7 +21,8 @@ armored vehicle.
 - Third-person stalker movement: walk, run, crawl, jump, fall, and collide with
   streamed pillars.
 - Driveable armored vehicle with suspension, four sampled wheel contacts,
-  steering, braking, wheel animation, slides, and a forward spotlight.
+  steering, braking, a faster graded-road top speed, wheel animation, slides,
+  and a forward spotlight.
 - A cordoned hangar yard with a checkpoint, workshop props, parked vehicles,
   and fourteen animated, individually lit artifact displays.
 - Distant sites, landmarks, rail embankments, substations, and a derailed train.
@@ -116,7 +117,7 @@ sudo pacman -S \
   base-devel \
   pkgconf \
   alsa-lib \
-  libudev \
+  systemd-libs \
   libx11 \
   libxcursor \
   libxi \

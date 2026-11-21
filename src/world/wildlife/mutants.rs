@@ -12,7 +12,7 @@ use crate::world::{
 
 use super::movement::{Wildlife, smooth};
 use super::sound::MotionSound;
-use super::{BASE, CreatureSound, Cue, HALF_SIZE, Kind, Route, Terrain};
+use super::{BASE, CreatureSound, Cue, HALF_SIZE, Kind, Route, SiteFauna, Terrain, site_fauna};
 
 pub(super) const VIEW_DISTANCE: f32 = 125.0;
 const SANCTUARY: f32 = 40.0;
@@ -459,6 +459,22 @@ pub(super) fn routes(terrain: &Terrain) -> Vec<(Kind, Route)> {
         pick_route(terrain, kind, site, spread, i as i32, &[]).map(|route| (kind, route))
     })
     .collect::<Vec<_>>();
+    for (index, site) in crate::world::sites::LANDMARKS.iter().enumerate() {
+        if site_fauna(index) != SiteFauna::Mutant {
+            continue;
+        }
+        let kind = SPECIES[(index / 3) % SPECIES.len()];
+        if let Some(route) = pick_route(
+            terrain,
+            kind,
+            site.center,
+            90.0,
+            900 + index as i32,
+            &routes,
+        ) {
+            routes.push((kind, route));
+        }
+    }
     for z in -3_i32..=3 {
         for x in -3_i32..=3 {
             if x == 0 && z == 0 {
@@ -487,6 +503,7 @@ fn pick_route(
             let noise = |channel| lattice_hash(seed, i, 127_u32 + channel);
             let at = site + Vec2::new(noise(0) - 0.5, noise(1) - 0.5) * (2.0 * spread);
             if !traversable(terrain, at)
+                || crate::world::sites::clear_footprint(at, 8.0)
                 || placed
                     .iter()
                     .any(|(_, route)| route.center.distance_squared(at) < 142.0_f32.powi(2))
@@ -514,9 +531,11 @@ fn pick_route(
         .into_iter()
         .map(|(_, route)| route)
         .find(|route| {
-            route
-                .circuit()
-                .all(|at| traversable(terrain, at) && terrain.road_mask(at.x, at.y) < 0.36)
+            route.circuit().all(|at| {
+                traversable(terrain, at)
+                    && terrain.road_mask(at.x, at.y) < 0.36
+                    && !crate::world::sites::clear_footprint(at, 5.0)
+            })
         })
 }
 
@@ -546,11 +565,11 @@ mod tests {
             );
         }
         for (i, (_, route)) in patrols.iter().enumerate() {
-            assert!(
-                route.circuit().all(|at| {
-                    traversable(&terrain, at) && terrain.road_mask(at.x, at.y) < 0.36
-                })
-            );
+            assert!(route.circuit().all(|at| {
+                traversable(&terrain, at)
+                    && terrain.road_mask(at.x, at.y) < 0.36
+                    && !crate::world::sites::clear_footprint(at, 5.0)
+            }));
             assert!(
                 patrols[..i]
                     .iter()

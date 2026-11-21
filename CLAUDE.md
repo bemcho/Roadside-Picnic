@@ -60,6 +60,14 @@ The upper-right in-game HUD shows the smoothed frame rate.
   between drier hummocks. Use `Terrain::water_depth_at` for traversal. Walk and
   drive through the shallows; deep water stops you. The main dirt track crosses
   at a vehicle-depth ford.
+- **Ground fog** (`src/world/ground_fog.rs`): a deterministic, scrolling
+  128x24x128 density volume forms variable low cotton-like banks inside a
+  10 m slab centered one meter above the player's rendered ground height. The
+  camera uses 48-step volumetric fog plus a far-weighted, regional 10–16-tile
+  distance curve, with the far plane fixed at 16 tiles. The terrain shader
+  masks that distance fog to low ground and leaves automatic Bevy fog disabled,
+  so the cloud bank thickens toward the horizon without washing the ridgelines;
+  bird materials also disable classic distance fog above the bank.
 - **Scenery** (`src/world/scenery.rs`): procedural pine groves and textured rock
   outcrops are drawn in chunk batches. Imported saplings, broadleaves, tall
   conifers, birches, and dead trees (`assets/models/trees/`) are reserved for
@@ -75,10 +83,15 @@ The upper-right in-game HUD shows the smoothed frame rate.
   collision and leave the terrain skyline visible.
 - **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
   shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
-  Each existing placement seeds a patch of up to ten procedural plants. The
-  game builds small, frustum-culled mesh batches as chunks stream in, not an
+  Each dry-grass placement seeds a patch of up to ten procedural plants, while
+  bushes and weeds seed up to 100 and spread across a proportional radius. The
+  root of every shrub or thorn patch uses an imported PBR model: byte-identical
+  4K UHD shrub/thornbush GLBs render within 8 m, then crossfade to 4K-textured
+  medium variants through about 70 m. The remaining patch plants use small,
+  frustum-culled mesh batches as chunks stream in, not an
   entity per plant. Ground cover has no collision or shadows. The rear and
-  sides of the hangar form a dense shelterbelt; the central yard and roads stay clear.
+  sides of the hangar form a dense shelterbelt; the central yard and roads stay
+  clear.
 - **Fauna** (`src/world/trees.rs`): four extracted, textured vegetation clusters
   (`assets/models/fauna/*.glb`) are scattered only around landmarks, on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
@@ -135,20 +148,35 @@ The upper-right in-game HUD shows the smoothed frame rate.
   follow the terrain, and flyers flap or glide. Near the hangar, the raven
   lands, walks, and takes off again while the frostwolf occasionally chases
   and lunges at the hexadeer. The chameleon stays on its modeled perch.
-  Wildlife is decorative and has no collision.
+  Every named site and landmark receives a deterministic local fauna route:
+  ground creatures, mutants, and flying birds rotate by site index. Walkers
+  stay outside the site's pad and road. Each base flight route fans into a
+  five-bird flock with staggered phase, radius, and altitude while preserving
+  landing routes and terrain clearance. Wildlife is otherwise decorative and
+  has no collision.
 - **Artifact showcase** (`src/world/base/artifacts.rs`): all 14 supplied
   artifacts sit on individual lit pedestals in two seven-table rows inside the
   hangar. The west row stays outside the aisle and the east row hugs the wall,
   leaving the armored vehicle's diagonal bay route clear. Every artifact keeps
   a stable rest transform and idly spins, bobs, and sways; display-table
-  colliders remain static. Resize standard artifacts to 1536 px, bake tangents,
-  and ground with `tools/prepare_plant_asset.py`. For the six dense PBR scans,
-  first run glTF Transform `simplify --ratio 0.004 --error 0.008` and then use
-  the same 1536 px/tangent/grounding pipeline.
+  colliders remain static. When the player approaches a table, the HUD resolves
+  its `ArtifactDisplay` index through `ui::text::ARTIFACT_COPY` and shows the
+  localized name and lore; the readout hides away from range and while paused.
+  The golden sphere retains its textured gold albedo
+  but receives a fully metallic, low-roughness runtime material so its surface
+  reflects the hangar light probe and spotlights. Artifact runtime GLBs keep the
+  original geometry, 4K texture maps, and source PBR/normal materials. Centered
+  sources are grounded by `tools/ground_full_asset.py`; already-grounded dense
+  PBR scans are copied byte-for-byte. The six dense scans also have distant
+  preview LODs in `assets/models/artifacts/lod/`; within 8 m the preview is
+  hidden and the untouched full PBR scene is streamed in. Do not replace the
+  primary showcase artifact with an LOD. Bevy's glTF loader generates MikkTSpace
+  tangents when a normal map needs them.
 - **Mutants** (`src/world/wildlife/mutants.rs`): bovines, chimeras, fleshdeer,
   and mutts occupy dry, biome-weighted patrol pockets across the Zone. Bovines
   give the stalker room; fleshdeer investigate up close; mutts and chimeras
-  pursue on foot, brace before lunging, and retreat to their patrols. A landed
+  pursue on foot, brace before lunging, and retreat to their patrols. Site-local
+  mutant patrols use the same pad, water, road, spacing, and leash checks. A landed
   strike respawns the stalker. The cordoned hangar yard and the occupied vehicle are safe.
   The original textured models use the shared wildlife rig, with species-specific
   foot and head weights. Rebuild the GLBs in `assets/models/mutants/` with the
@@ -160,8 +188,10 @@ The upper-right in-game HUD shows the smoothed frame rate.
   0.045 --error 0.0014`, then `resize --width 2048 --height 2048` (use
   `--vertex-layout separate` for both), bake `tangents`, then run
   `tools/prepare_hangar_asset.py` to level the slab and apron. If the geometry
-  changes, remeasure the walls and pendant mounts in `base.rs`. A local light
-  probe and warm pendants keep the interior dim without changing outdoor lighting.
+  changes, remeasure the walls and pendant mounts in `base.rs`. A stronger
+  local light probe and broad warm pendants keep the interior readable without
+  changing outdoor lighting. Prop and artifact spotlights add focused task and
+  exhibit light on top of that soft fill.
   The workshop and tool rack, jack, map board, lab bench, table, and toilet
   use the hangar-local poses and collision in `src/world/base/props.rs`.
   Each prop also has a short-range warm spotlight without a shadow map.
@@ -176,6 +206,8 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
   The chassis and suspension sample the rendered terrain under the wheels.
+  Forward speed rises from 16 m/s off-road to 24 m/s on the center of a graded
+  road, then blends back down near the shoulder and retains the ford water cap.
   Throttle and steering ease in, steering gets gentler at speed, and the chase
   camera damps vehicle movement and zoom without delaying mouse orbit.
   When throttle is held while blocked, the tires spin without moving the hull.
@@ -205,7 +237,8 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Sky & lighting** (`src/world/mod.rs`) use Bevy's physical `Atmosphere` with a `SunDisk`
   lit at `lux::RAW_SUNLIGHT`; the camera runs HDR at `Exposure { ev100: 13.0 }`. Tune light
   and emissive values in physical units for that exposure, and steer the look with `SUN_DIRECTION`
-  and `HAZE` rather than adding ambient light or distance fog.
+  and `HAZE` rather than adding ambient light. The sun is also a
+  `VolumetricLight` for the low fog's directional scattering.
 
 ## Build & Run Commands
 

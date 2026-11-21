@@ -2,6 +2,8 @@ import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 };
+@if(DISTANCE_FOG) import bevy_pbr::render::pbr_functions::apply_fog;
+@if(DISTANCE_FOG) import bevy_pbr::render::mesh_view_bindings::{fog, view};
 
 @if(PREPASS_PIPELINE)
 import bevy_pbr::{
@@ -20,6 +22,7 @@ import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
 @group(constants::MATERIAL_BIND_GROUP) @binding(106) var earth_surface: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(107) var road_surface: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> road_bounds: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> fog_settings: vec4<f32>;
 
 fn patch_hash(cell: vec2<f32>) -> f32 {
     let p = fract(vec3<f32>(cell.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
@@ -148,6 +151,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     out = deferred_output(in, pbr_input);
 } @else {
     out.color = apply_pbr_lighting(pbr_input);
+    @if(DISTANCE_FOG) {
+        let fog_top = fog_settings.x;
+        let fog_fade_bottom = fog_top - fog_settings.y * 0.7;
+        let low_ground = 1.0 - smoothstep(fog_fade_bottom, fog_top, p.y);
+        let distant_ground = apply_fog(
+            fog,
+            out.color,
+            p,
+            view.world_position.xyz,
+            pbr_input.frag_coord.xy,
+        );
+        out.color = mix(out.color, distant_ground, low_ground);
+    }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
 }
     return out;

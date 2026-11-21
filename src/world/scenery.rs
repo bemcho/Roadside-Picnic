@@ -293,6 +293,7 @@ pub(super) fn stream_scenery(
                     trees::spawn_trees(objects, &server, &sites.undergrowth);
                     super::sites::spawn_solids(objects, &terrain, tile);
                     plants::spawn_plants(objects, &terrain, tile, &plants, &mut meshes);
+                    plants::spawn_bushes(objects, &server, &terrain, tile);
                 })
                 .id();
             scenery.active.insert(tile, entity);
@@ -633,6 +634,7 @@ mod tests {
     fn distant_colliders_unload_and_return_at_the_same_position() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
+            .init_asset::<bevy::world_serialization::WorldAsset>()
             .init_resource::<PlantMaterials>()
             .init_resource::<Assets<Mesh>>()
             .insert_resource(Terrain::new())

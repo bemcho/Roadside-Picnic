@@ -5,6 +5,7 @@ mod props;
 
 use std::sync::LazyLock;
 
+use bevy::gltf::GltfMaterial;
 use bevy::light::{EnvironmentMapLight, LightProbe};
 use bevy::prelude::*;
 
@@ -15,12 +16,15 @@ use super::WorldRoot;
 use super::collision::{Collider, Pillar};
 use super::terrain::{BASE, Terrain};
 
-pub(super) use artifacts::animate_artifacts;
+pub(crate) use artifacts::ArtifactDisplay;
+pub(super) use artifacts::{animate_artifacts, stream_full_artifacts};
 
 const MODEL_SCALE: f32 = 38.0;
 const FLOOR_DATUM: f32 = 0.0217;
 const DOOR_Z: f32 = 0.375;
 const DOOR_HALF_WIDTH: f32 = 0.294;
+const HALL_PROBE_INTENSITY: f32 = 8_000.0;
+const PENDANT_POWER: f32 = 4.9e5;
 
 struct YardVehicle {
     name: &'static str,
@@ -119,6 +123,7 @@ pub(super) fn spawn_base(
     mut commands: Commands,
     server: Res<AssetServer>,
     terrain: Res<Terrain>,
+    paints: Res<Assets<GltfMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -148,7 +153,14 @@ pub(super) fn spawn_base(
     commands.entity(vehicle).insert(WorldRoot);
     spawn_yard_vehicles(&mut commands, &server, &terrain);
     props::spawn_hangar_props(&mut commands, hall, &server, &mut meshes, &mut materials);
-    artifacts::spawn_artifact_showcase(&mut commands, hall, &server, &mut meshes, &mut materials);
+    artifacts::spawn_artifact_showcase(
+        &mut commands,
+        hall,
+        &server,
+        &paints,
+        &mut meshes,
+        &mut materials,
+    );
     spawn_hall_probe(&mut commands, hall, &mut images);
     spawn_lamps(&mut commands, hall, &mut meshes, &mut materials);
 }
@@ -186,7 +198,7 @@ fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<I
             Color::linear_rgb(0.62, 0.68, 0.76),
             Color::linear_rgb(0.25, 0.26, 0.30),
         )
-        .with_intensity(1_750.0),
+        .with_intensity(HALL_PROBE_INTENSITY),
         Transform::from_xyz(0.0, 8.0, -2.0).with_scale(Vec3::new(29.0, 17.0, 33.0)),
         ChildOf(hall),
     ));
@@ -245,11 +257,11 @@ fn spawn_lamps(
                 } else {
                     Color::srgb(1.0, 0.95, 0.86)
                 },
-                intensity: 2.45e5 * y * y,
+                intensity: PENDANT_POWER * y * y,
                 range: y + 9.0,
                 radius: 0.34,
-                outer_angle: 0.58,
-                inner_angle: 0.25,
+                outer_angle: 0.64,
+                inner_angle: 0.28,
                 shadow_maps_enabled: z == 9.0,
                 ..default()
             },

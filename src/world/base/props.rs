@@ -9,6 +9,7 @@ use super::{Collider, Pillar};
 
 const SLAB: f32 = 0.03;
 const WEST_WALL_INWARD: f32 = 1.415;
+const PROP_LIGHT_INTENSITY: f32 = 6.4e6;
 
 struct Prop {
     model: &'static str,
@@ -40,7 +41,7 @@ impl Prop {
         (
             SpotLight {
                 color: Color::srgb(1.0, 0.87, 0.71),
-                intensity: 3.2e6,
+                intensity: PROP_LIGHT_INTENSITY,
                 range: 5.8,
                 inner_angle: 0.16,
                 outer_angle: 0.34,

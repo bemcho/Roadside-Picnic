@@ -77,8 +77,9 @@ flowchart LR
 | Asset paths | `src/assets/` | Canonical paths, preload handles, shared GLB loader helpers |
 | Player | `src/player/` | Stalker, camera, input, gravity, crawling, vehicle interaction |
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
-| World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, spawn and teardown |
+| World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
+| Ground fog | `src/world/ground_fog.rs` | Low 3D density banks, regional visibility, fog camera settings |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported and procedural trees, sway, fall, ground cover |
@@ -117,10 +118,10 @@ is not preloaded, the splash can report ready before that asset is available.
 `OnEnter(AppState::InGame)` runs the world and player spawn paths:
 
 - `WorldPlugin` uploads the completed landscape meshes and spawns terrain,
-  water, vegetation batches, sky, sun, hangar, props, yard vehicles, artifact
-  pedestals, cordon, wildlife, and sites.
+  water, vegetation batches, sky, sun, ground fog, hangar, props, yard
+  vehicles, artifact pedestals, cordon, wildlife, and sites.
 - `PlayerPlugin` spawns the stalker and its skinned scene, camera, exposure, and
-  atmosphere settings.
+  atmosphere, volumetric, and distance-fog settings.
 - `GameAudioPlugin` starts the Zone ambience.
 - `ZonePlugin` spawns its per-run anomaly and collectible placeholders.
 - `UiPlugin` creates the HUD.
@@ -198,6 +199,11 @@ The async landscape build prepares coarse scenic terrain and all site/scenery
 layouts up front. Nearby ground tiles swap to their detailed mesh on demand.
 Collision, imported trees, and plants stream around the player in a 3x3 tile
 neighborhood rather than following the distant visual range.
+Bush and weed seeds expand into ten times as many visual plants as dry grass,
+with the patch radius widened proportionally. Each shrub/thorn patch root uses
+an imported PBR model: a full 4K UHD mesh within 8 m crossfades to a textured
+medium variant through the near scenery range; all placements still pass the
+road, water, yard, and site-clearance filters before entering a batch.
 
 `RoadNetwork` indexes route segments by terrain tile. It produces both:
 
@@ -206,6 +212,33 @@ neighborhood rather than following the distant visual range.
 
 Road legs must connect to a real route vertex, stay below the grade and water
 thresholds tested in `world/roads.rs`, and avoid cutting through site pads.
+
+## Fog and draw distance
+
+`world/ground_fog.rs` owns the weather layer rather than tying it to the
+terrain chunks. On Zone entry it builds a deterministic 128x24x128 periodic
+`R8Unorm` density texture and a 4,096 m-wide, 10 m-high `FogVolume`. Layered
+horizontal noise shapes the cotton banks, a cloud-dependent vertical envelope
+forms their upper billows, and a small texture offset scrolls the banks with
+time.
+
+During `InGamePhase::Running`, the volume follows `Terrain::mesh_height_at` at
+the player's X/Z position with its center one meter above the rendered ground.
+The player camera adds `VolumetricFog` with 48 raymarch steps, while
+`VolumetricLight` on the sun supplies directional scattering. The volume stays
+above the local ground while its taper preserves the sky and high ridgelines.
+
+`update_distance_fog` derives a regional visibility from the same cloud field
+and lowland height. It varies between 1,280 and 2,048 m (10–16 terrain tiles),
+and `CAMERA_FAR` caps the perspective camera at 16 tiles. The squared falloff
+keeps nearby ground crisp, then rolls distant PBR detail and low cloud banks
+into denser fog toward that visibility limit. The terrain extension receives
+the current fog ceiling, and `terrain.wesl` applies Bevy's distance-fog result
+through a low-ground mask while automatic material fog stays disabled. Bird
+bodies and procedural wings also set `fog_enabled = false`. This combination
+provides a dense distant shelf without turning the mountain skyline into
+full-screen haze. Re-enabling classic fog on `TerrainMaterial` bypasses that
+height mask and will wash the ridges.
 
 ## Sites, base, and static props
 
@@ -346,6 +379,14 @@ separation, and habitat bias. `move_mutants` can send a `Respawn` message after
 a valid strike. The sanctuary near the hangar and an occupied vehicle prevent
 the hostile loop from targeting the player there.
 
+`LANDMARKS` also seed local wildlife coverage: a deterministic site index
+chooses a ground-animal, mutant, or flight route. Ground routes reject the
+site pad and road, while birds orbit the site at a terrain-relative altitude.
+Every original sky lane is expanded into a five-bird flock with staggered phase,
+radius, and altitude; landing ravens keep the original dry perch circuit.
+The cross-module test in `wildlife.rs` verifies that every site has a nearby
+route rather than relying on accidental grid overlap.
+
 Creature motion also writes `CreatureSound` messages. The audio plugin limits
 voices, spatializes world positions, and emits footfall, call, growl, takeoff,
 strike, alarm, and impact cues without tying the AI directly to an audio sink.
@@ -452,12 +493,18 @@ Important paths:
     sunlight, and no artificial ambient fill outdoors. A material that looks
     correct at default Bevy exposure may be washed out or black here.
 
-17. **Be conservative with always-on work.**
+17. **Keep fog height-aware.**
+    Use `ground_fog.rs` for the low cotton layer. The custom terrain and birds
+    intentionally opt out of automatic Bevy distance fog; terrain applies that
+    same falloff only through `terrain.wesl`'s height mask, while birds skip it
+    entirely. Keep skyline and flyer exceptions in those explicit shader paths.
+
+18. **Be conservative with always-on work.**
     Terrain/scenery are batched and streamed for a reason. Avoid an entity per
     grass blade, rock, tree, or distant plant. Add a `VisibilityRange` and
     streaming owner when the object is not always local.
 
-18. **Keep WASM in mind.**
+19. **Keep WASM in mind.**
     New game code should not use `std::thread` or `std::net`; gate unavoidable
     platform behavior. Never enable hotpatching, file watching, or dynamic
     linking by default in release/WASM builds.
@@ -513,7 +560,8 @@ than stretching `sites.rs` into a universal object registry.
 
 ## How to add an artifact or exhibit
 
-1. Place the optimized GLB in `assets/models/artifacts/`.
+1. Preserve the full source GLB in `assets/models/artifacts/` without
+   simplifying its geometry or resizing its texture maps.
 2. Add its path to `assets::ARTIFACTS`.
 3. Add an `ArtifactModel` descriptor in `world/base/artifacts.rs`:
    - display name,
@@ -522,9 +570,15 @@ than stretching `sites.rs` into a universal object registry.
    - spotlight palette.
 4. Let the showcase assign a pedestal from `TABLE_Z`; do not position the
    artifact directly in world space unless it is outside the hangar display.
-5. Keep the model's grounded origin at the tabletop and let `ArtifactIdle`
+5. Ground centered-on-origin sources with
+   `python3 tools/ground_full_asset.py <source.glb> <runtime.glb>`. Copy
+   already-grounded dense PBR scans without changing their materials.
+6. Dense PBR scans may have a distant preview under `artifacts/lod/`, but the
+   showcase streams the full source mesh within 8 m and never substitutes the
+   preview for the near-view artifact.
+7. Keep the model's grounded origin at the tabletop and let `ArtifactIdle`
    animate from a stable `rest` transform.
-6. If the artifact is meant to be collectible in the Zone, add gameplay state
+8. If the artifact is meant to be collectible in the Zone, add gameplay state
    and a `ZonePlugin` entity separately from the hangar exhibit.
 
 ## How to add a creature or mutant

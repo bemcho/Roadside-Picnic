@@ -16,8 +16,11 @@ use crate::assets::{self, PreloadedAssets};
 use movement::{Flight, Wildlife, dry_ground};
 use rig::{Rig, wing_mesh};
 
+use super::sites::LANDMARKS;
 use super::terrain::{BASE, HALF_SIZE, Terrain};
 use super::{WorldRoot, detail_range};
+
+const SKY_FLOCK_MULTIPLIER: usize = 5;
 
 pub(super) use movement::move_wildlife;
 pub(super) use mutants::move_mutants;
@@ -119,6 +122,21 @@ struct WildlifeModels {
     feathers: [Handle<StandardMaterial>; 2],
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SiteFauna {
+    Mutant,
+    Ground,
+    Bird,
+}
+
+pub(super) fn site_fauna(index: usize) -> SiteFauna {
+    match index % 3 {
+        0 => SiteFauna::Mutant,
+        1 => SiteFauna::Ground,
+        _ => SiteFauna::Bird,
+    }
+}
+
 pub(super) fn spawn_wildlife(
     mut commands: Commands,
     server: Res<AssetServer>,
@@ -135,15 +153,20 @@ pub(super) fn spawn_wildlife(
                 .get(&paint)
                 .expect("wildlife materials are preloaded before the Zone opens");
             let mesh = meshes.get(&mesh).expect("preloaded wildlife mesh").clone();
+            let mut paint = standard_material_from_gltf_material(paint);
+            if kind.is_bird() {
+                paint.fog_enabled = false;
+            }
             (
                 Rig::build(kind, mesh, &mut meshes, &mut binds),
-                materials.add(standard_material_from_gltf_material(paint)),
+                materials.add(paint),
             )
         }),
         wings: [-1.0, 1.0].map(|side| meshes.add(wing_mesh(side))),
         feathers: [Color::srgb(0.12, 0.13, 0.16), Color::srgb(0.33, 0.24, 0.16)].map(|color| {
             materials.add(StandardMaterial {
                 base_color: color,
+                fog_enabled: false,
                 perceptual_roughness: 0.94,
                 cull_mode: None,
                 double_sided: true,
@@ -169,7 +192,7 @@ pub(super) fn spawn_wildlife(
 
 fn ground_routes(terrain: &Terrain) -> Vec<(Kind, Route)> {
     let base = Vec2::from(BASE);
-    [
+    let mut routes = [
         (Kind::Frostwolf, base + Vec2::new(-32.0, 29.0)),
         (Kind::Hexadeer, base + Vec2::new(-29.0, 35.0)),
         (Kind::Frostwolf, Vec2::new(-237.0, -89.0)),
@@ -228,10 +251,97 @@ fn ground_routes(terrain: &Terrain) -> Vec<(Kind, Route)> {
         }
         None
     })
-    .collect()
+    .collect::<Vec<_>>();
+
+    const SITE_SPECIES: [Kind; 4] = [Kind::Frostwolf, Kind::Hexadeer, Kind::Chameleon, Kind::Owl];
+    for (index, site) in LANDMARKS.iter().enumerate() {
+        if site_fauna(index) != SiteFauna::Ground {
+            continue;
+        }
+        let kind = SITE_SPECIES[(index / 3) % SITE_SPECIES.len()];
+        if let Some(route) = site_ground_route(terrain, kind, site.center, index, &routes) {
+            routes.push((kind, route));
+        }
+    }
+    routes
+}
+
+fn site_ground_route(
+    terrain: &Terrain,
+    kind: Kind,
+    site: Vec2,
+    seed: usize,
+    placed: &[(Kind, Route)],
+) -> Option<Route> {
+    let (radius, speed) = match kind {
+        Kind::Frostwolf => (Vec2::new(6.6, 4.1), 0.18),
+        Kind::Hexadeer => (Vec2::new(5.2, 4.0), 0.15),
+        Kind::Chameleon => (Vec2::new(1.7, 1.4), 0.18),
+        Kind::Owl => (Vec2::new(0.8, 0.58), 0.30),
+        _ => unreachable!("site ground route species are fixed"),
+    };
+    (0..72).find_map(|attempt| {
+        let roll = |channel| {
+            super::terrain::lattice_hash(seed as i32, attempt, 0x51A7_E001 + channel as u32)
+        };
+        let offset = Vec2::from_angle(roll(0) * TAU) * (55.0 + roll(1) * 75.0);
+        let route = Route {
+            center: site + offset,
+            radius,
+            phase: roll(2) * TAU,
+            speed,
+        };
+        (placed
+            .iter()
+            .all(|(_, other)| route.center.distance(other.center) > 42.0)
+            && route.circuit().all(|at| {
+                dry_ground(terrain, at)
+                    && terrain.road_mask(at.x, at.y) < 0.025
+                    && !super::sites::clear_footprint(at, 8.0)
+            }))
+        .then_some(route)
+    })
 }
 
 fn flight_routes(terrain: &Terrain) -> Vec<(Kind, Route, Flight)> {
+    let base_routes = base_flight_routes(terrain);
+    base_routes
+        .into_iter()
+        .flat_map(|(kind, route, flight)| {
+            let base_top = route
+                .circuit()
+                .map(|at| terrain.mesh_height_at(at))
+                .fold(f32::NEG_INFINITY, f32::max);
+            let clearance = flight.cruise - base_top;
+            (0..SKY_FLOCK_MULTIPLIER).map(move |member| {
+                let spread = member as f32;
+                let follower = Route {
+                    radius: if flight.lands {
+                        route.radius
+                    } else {
+                        route.radius + Vec2::new(1.5 * spread, 1.1 * spread)
+                    },
+                    phase: route.phase + spread * TAU / SKY_FLOCK_MULTIPLIER as f32,
+                    ..route
+                };
+                let top = follower
+                    .circuit()
+                    .map(|at| terrain.mesh_height_at(at))
+                    .fold(f32::NEG_INFINITY, f32::max);
+                (
+                    kind,
+                    follower,
+                    Flight {
+                        cruise: top + clearance + 2.3 * spread,
+                        ..flight
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
+fn base_flight_routes(terrain: &Terrain) -> Vec<(Kind, Route, Flight)> {
     let base = Vec2::from(BASE);
     let lanes: [(Vec2, Vec2, f32, f32, &[Kind]); 8] = [
         (
@@ -339,6 +449,31 @@ fn flight_routes(terrain: &Terrain) -> Vec<(Kind, Route, Flight)> {
             ));
         }
     }
+    const SITE_BIRDS: [Kind; 3] = [Kind::Hawk, Kind::Raven, Kind::Skyglider];
+    for (index, site) in LANDMARKS.iter().enumerate() {
+        if site_fauna(index) != SiteFauna::Bird {
+            continue;
+        }
+        let kind = SITE_BIRDS[(index / 3) % SITE_BIRDS.len()];
+        let route = Route {
+            center: site.center,
+            radius: Vec2::new(24.0 + (index % 3) as f32 * 4.0, 31.0),
+            phase: index as f32 * 0.91,
+            speed: 0.17 + (index % 2) as f32 * 0.02,
+        };
+        let top = route
+            .circuit()
+            .map(|at| terrain.mesh_height_at(at))
+            .fold(f32::NEG_INFINITY, f32::max);
+        routes.push((
+            kind,
+            route,
+            Flight {
+                cruise: top + 33.0 + (index % 4) as f32 * 3.0,
+                lands: false,
+            },
+        ));
+    }
     routes
 }
 
@@ -394,9 +529,11 @@ mod tests {
                 "no {kind:?} in the Zone"
             );
         }
-        assert!(ground.len() <= 22, "avoid crowding the Zone");
+        assert!(ground.len() <= 34, "avoid crowding the Zone");
 
+        let base_flights = base_flight_routes(&terrain);
         let flights = flight_routes(&terrain);
+        assert_eq!(flights.len(), base_flights.len() * SKY_FLOCK_MULTIPLIER);
         assert!(flights.iter().any(|(kind, route, _)| {
             *kind == Kind::Raven && route.circuit().all(|at| at.distance(base) < 75.0)
         }));
@@ -435,6 +572,32 @@ mod tests {
                     .iter()
                     .any(|(_, route, _)| route.circuit().all(outside)),
                 "no border birds at {direction}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_site_and_landmark_has_nearby_wildlife() {
+        let terrain = Terrain::new();
+        let ground = ground_routes(&terrain);
+        let mutants = mutants::routes(&terrain);
+        let flights = flight_routes(&terrain);
+        for (index, site) in LANDMARKS.iter().enumerate() {
+            let nearby = match site_fauna(index) {
+                SiteFauna::Mutant => mutants
+                    .iter()
+                    .any(|(_, route)| route.center.distance(site.center) < 140.0),
+                SiteFauna::Ground => ground
+                    .iter()
+                    .any(|(_, route)| route.center.distance(site.center) < 140.0),
+                SiteFauna::Bird => flights
+                    .iter()
+                    .any(|(_, route, _)| route.center.distance(site.center) < 1.0),
+            };
+            assert!(
+                nearby,
+                "site {index} at {:?} has no local wildlife",
+                site.center
             );
         }
     }

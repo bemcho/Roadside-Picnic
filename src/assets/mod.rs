@@ -59,6 +59,17 @@ pub const HANGAR_TABLE: &str = "models/base/props/table.glb";
 pub const HANGAR_TOILET: &str = "models/base/props/toilet.glb";
 pub const HANGAR_TOOLS: &str = "models/base/props/tools.glb";
 pub const HANGAR_WORKSHOP: &str = "models/base/props/workshop.glb";
+pub const BUSH_UHD_SHRUB: &str = "models/plants/uhd/shrub.glb";
+pub const BUSH_UHD_THORNBUSH: &str = "models/plants/uhd/thornbush.glb";
+pub const BUSH_SHRUB_VARIANTS: [&str; 6] = [
+    "models/plants/bramble.glb",
+    "models/plants/dogrose.glb",
+    "models/plants/elder.glb",
+    "models/plants/juniper.glb",
+    "models/plants/wormwood.glb",
+    "models/plants/shrub.glb",
+];
+pub const BUSH_MEDIUM_THORNBUSH: &str = "models/plants/thornbush.glb";
 pub const ARTIFACTS: [&str; 14] = [
     "models/artifacts/artifact-death-lamp.glb",
     "models/artifacts/artifact-golden-sphere.glb",
@@ -74,6 +85,14 @@ pub const ARTIFACTS: [&str; 14] = [
     "models/artifacts/fullempty.glb",
     "models/artifacts/pinsneedles.glb",
     "models/artifacts/soso.glb",
+];
+pub const ARTIFACT_PREVIEWS: [&str; 6] = [
+    "models/artifacts/lod/blackspark.glb",
+    "models/artifacts/lod/bracelet.glb",
+    "models/artifacts/lod/empty.glb",
+    "models/artifacts/lod/fullempty.glb",
+    "models/artifacts/lod/pinsneedles.glb",
+    "models/artifacts/lod/soso.glb",
 ];
 
 /// Root folder for textures and materials.
@@ -110,6 +129,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         VEHICLE_QUARRY,
         VEHICLE_SEDAN,
         VEHICLE_TRAIN,
+        BUSH_MEDIUM_THORNBUSH,
     ];
     let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
     let data_maps = [
@@ -123,11 +143,23 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
             .untyped()
     }));
-    assets.0.extend(ARTIFACTS.map(|path| {
+    assets.0.extend(ARTIFACTS[..8].iter().copied().map(|path| {
         server
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
             .untyped()
     }));
+    assets.0.extend(BUSH_SHRUB_VARIANTS.map(|path| {
+        server
+            .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
+            .untyped()
+    }));
+    assets.0.extend(ARTIFACT_PREVIEWS.map(|path| {
+        server
+            .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
+            .untyped()
+    }));
+    let (golden_sphere, gold) = load_single_primitive(&server, ARTIFACTS[1]);
+    assets.0.extend([golden_sphere.untyped(), gold.untyped()]);
     assets.0.push(load_vehicle_scene(&server).untyped());
     assets
         .0

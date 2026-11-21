@@ -7,20 +7,25 @@ use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy::world_serialization::WorldInstanceReady;
+
+use crate::assets;
 
 use super::cordon::{near_wall_or_checkpoint, reserve_scenery, shelterbelt};
-use super::detail_range;
 use super::hydrology::Wetlands;
 use super::scenery::forest_density;
 use super::terrain::{
     BASE, HALF_SIZE, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise,
 };
+use super::{detail_range, range_scene_meshes};
 
 const CELL: f32 = 8.0;
 const SEED: u32 = 0x1035_F108;
 const PATCH_SIZE: usize = 10;
+const DENSE_PATCH_MULTIPLIER: usize = 10;
 const BATCHES_PER_SIDE: usize = 4;
 const BATCH_SIZE: f32 = TILE_SIZE / BATCHES_PER_SIDE as f32;
+const FULL_BUSH_RANGE: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -80,6 +85,22 @@ pub(super) fn prepare_plant_materials(
 struct PlantSite {
     kind: Kind,
     pose: Transform,
+    seed: bool,
+}
+
+#[derive(Component)]
+pub(in crate::world) struct BushDisplay {
+    kind: Kind,
+}
+
+#[derive(Component)]
+pub(in crate::world) struct BushPreview {
+    display: Entity,
+}
+
+#[derive(Component)]
+pub(in crate::world) struct FullBush {
+    display: Entity,
 }
 
 impl PlantSite {
@@ -102,6 +123,7 @@ impl PlantSite {
             pose: Transform::from_xyz(at.x, base - 0.06, at.y)
                 .with_rotation(Quat::from_rotation_y(angle))
                 .with_scale(Vec3::splat(scale)),
+            seed: true,
         })
     }
 }
@@ -113,8 +135,8 @@ fn plant_sites(terrain: &Terrain, tile: IVec2) -> Vec<PlantSite> {
     }
     let mut belt = Vec::new();
     grow_hangar_plants(terrain, tile, &mut belt);
-    expand_patches(terrain, &wild, false)
-        .chain(expand_patches(terrain, &belt, true))
+    expand_patches(terrain, &wild, false, DENSE_PATCH_MULTIPLIER)
+        .chain(expand_patches(terrain, &belt, true, DENSE_PATCH_MULTIPLIER))
         .collect()
 }
 
@@ -122,15 +144,22 @@ fn expand_patches<'a>(
     terrain: &'a Terrain,
     seeds: &'a [PlantSite],
     in_belt: bool,
+    density_multiplier: usize,
 ) -> impl Iterator<Item = PlantSite> + 'a {
     seeds.iter().flat_map(move |&seed| {
         let root = seed.pose.translation.xz();
         let id = (root * 100.0).as_ivec2();
-        let radius = if in_belt { 2.45 } else { 4.2 };
-        std::iter::once(seed).chain((1..PATCH_SIZE).filter_map(move |i| {
+        let multiplier = if seed.kind == Kind::DryGrass {
+            1
+        } else {
+            density_multiplier.max(1)
+        };
+        let patch_size = PATCH_SIZE * multiplier;
+        let radius = if in_belt { 2.45 } else { 4.2 } * (multiplier as f32).sqrt();
+        std::iter::once(seed).chain((1..patch_size).filter_map(move |i| {
             let roll = |n| lattice_hash(id.x, id.y, SEED + i as u32 * 17 + n);
             let angle = i as f32 * 2.399_963 + roll(0) * 0.50;
-            let reach = radius * ((i as f32 - 0.42) / PATCH_SIZE as f32).sqrt();
+            let reach = radius * ((i as f32 - 0.42) / patch_size as f32).sqrt();
             let offset = Vec2::from_angle(angle) * reach;
             [1.0, 0.60, 0.32].into_iter().find_map(|factor| {
                 let at = root + factor * offset;
@@ -158,6 +187,7 @@ fn expand_patches<'a>(
                         pose: Transform::from_xyz(at.x, ground - 0.055, at.y)
                             .with_rotation(Quat::from_rotation_y(roll(2) * TAU))
                             .with_scale(seed.pose.scale * lerp(0.55, 1.0, roll(3))),
+                        seed: false,
                     })
             })
         }))
@@ -299,6 +329,124 @@ pub(super) fn spawn_plants(
     }
 }
 
+pub(super) fn spawn_bushes(
+    parent: &mut ChildSpawnerCommands,
+    server: &AssetServer,
+    terrain: &Terrain,
+    tile: IVec2,
+) {
+    for site in plant_sites(terrain, tile)
+        .into_iter()
+        .filter(|site| site.seed && matches!(site.kind, Kind::Shrub | Kind::Thornbush))
+    {
+        let mut root = parent.spawn((
+            BushDisplay { kind: site.kind },
+            site.pose,
+            Visibility::default(),
+        ));
+        let display = root.id();
+        root.with_children(|bush| {
+            bush.spawn((
+                BushPreview { display },
+                WorldAssetRoot(
+                    server.load(
+                        GltfAssetLabel::Scene(0).from_asset(imported_bush_medium_path(&site)),
+                    ),
+                ),
+                Transform::IDENTITY,
+                detail_range(66.0, 10.0),
+            ))
+            .observe(range_scene_meshes);
+        });
+    }
+}
+
+pub(super) fn stream_full_bushes(
+    mut commands: Commands,
+    player: Query<&Transform, With<crate::player::Player>>,
+    bushes: Query<(Entity, &BushDisplay, &GlobalTransform)>,
+    fulls: Query<(Entity, &FullBush)>,
+    previews: Query<(Entity, &BushPreview)>,
+    server: Res<AssetServer>,
+) {
+    let selected = player.single().ok().and_then(|player| {
+        bushes
+            .iter()
+            .filter_map(|(display, bush, pose)| {
+                let distance = player.translation.xz().distance(pose.translation().xz());
+                (distance <= FULL_BUSH_RANGE).then_some((distance, display, bush.kind))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    });
+    let active = selected.map(|(_, display, _)| display);
+    for (entity, full) in &fulls {
+        if active != Some(full.display) {
+            commands.entity(entity).despawn();
+            for (preview, marker) in &previews {
+                if marker.display == full.display {
+                    commands.entity(preview).insert(Visibility::Inherited);
+                }
+            }
+        }
+    }
+
+    let Some((_, display, kind)) = selected else {
+        return;
+    };
+    if fulls.iter().any(|(_, full)| full.display == display) {
+        return;
+    }
+    commands
+        .spawn((
+            FullBush { display },
+            ChildOf(display),
+            WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(uhd_bush_path(kind)))),
+            Transform::IDENTITY,
+            detail_range(12.0, 2.0),
+            Visibility::Hidden,
+        ))
+        .observe(range_scene_meshes)
+        .observe(reveal_full_bush);
+}
+
+fn reveal_full_bush(
+    ready: On<WorldInstanceReady>,
+    fulls: Query<&FullBush>,
+    previews: Query<(Entity, &BushPreview)>,
+    mut commands: Commands,
+) {
+    let Ok(full) = fulls.get(ready.entity) else {
+        return;
+    };
+    commands.entity(ready.entity).insert(Visibility::Inherited);
+    for (preview, marker) in &previews {
+        if marker.display == full.display {
+            commands.entity(preview).insert(Visibility::Hidden);
+        }
+    }
+}
+
+fn uhd_bush_path(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Shrub => assets::BUSH_UHD_SHRUB,
+        Kind::Thornbush => assets::BUSH_UHD_THORNBUSH,
+        _ => unreachable!("only bush kinds have full-quality meshes"),
+    }
+}
+
+fn imported_bush_medium_path(site: &PlantSite) -> &'static str {
+    let seed = (site.pose.translation.xz() * 191.0).as_ivec2();
+    match site.kind {
+        Kind::Shrub => {
+            assets::BUSH_SHRUB_VARIANTS[(lattice_hash(seed.x, seed.y, SEED + 913)
+                * assets::BUSH_SHRUB_VARIANTS.len() as f32)
+                as usize]
+        }
+        Kind::Thornbush => assets::BUSH_MEDIUM_THORNBUSH,
+        _ => unreachable!("only shrub and thornbush seeds use imported bushes"),
+    }
+}
+
 fn batch_center(tile: IVec2, index: usize) -> Vec2 {
     let cell = Vec2::new(
         (index % BATCHES_PER_SIDE) as f32,
@@ -315,6 +463,9 @@ fn plant_batches(
     let mut batches: [(PlantBatch, PlantBatch); BATCHES_PER_SIDE * BATCHES_PER_SIDE] =
         Default::default();
     for mut site in plant_sites(terrain, tile) {
+        if site.seed && matches!(site.kind, Kind::Shrub | Kind::Thornbush) {
+            continue;
+        }
         let at = site.pose.translation.xz();
         let cell = ((at - origin) / BATCH_SIZE)
             .floor()
@@ -501,7 +652,7 @@ mod tests {
     use crate::world::Collider;
 
     #[test]
-    fn ground_cover_has_tenfold_density_and_respects_habitats_and_clearances() {
+    fn bushes_and_weeds_are_tenfold_and_respect_habitats_and_clearances() {
         let terrain = Terrain::new();
         let wet_tile = IVec2::new(-2, 1);
         assert_eq!(
@@ -509,7 +660,7 @@ mod tests {
             plant_sites(&terrain, wet_tile)
         );
         let mut counts = [0; Kind::ALL.len()];
-        let mut original_counts = [0; Kind::ALL.len()];
+        let mut baseline_counts = [0; Kind::ALL.len()];
         for tile in [
             wet_tile,
             IVec2::new(-2, 2),
@@ -522,10 +673,10 @@ mod tests {
             for layer in 0..5 {
                 grow_plant_layer(&terrain, tile, layer, &mut wild);
             }
-            for site in &wild {
-                original_counts[site.kind as usize] += 1;
+            for site in expand_patches(&terrain, &wild, false, 1) {
+                baseline_counts[site.kind as usize] += 1;
             }
-            for site in expand_patches(&terrain, &wild, false) {
+            for site in expand_patches(&terrain, &wild, false, DENSE_PATCH_MULTIPLIER) {
                 let p = site.pose.translation;
                 counts[site.kind as usize] += 1;
                 let wet = Wetlands::at(p.x, p.z);
@@ -544,12 +695,17 @@ mod tests {
             "plant counts: {counts:?}"
         );
         for kind in Kind::ALL {
-            let before = original_counts[kind as usize];
+            let before = baseline_counts[kind as usize];
             let after = counts[kind as usize];
-            assert!(
-                (9.3..=10.0).contains(&(after as f32 / before as f32)),
-                "{kind:?}: {before} -> {after}"
-            );
+            let ratio = after as f32 / before as f32;
+            if kind == Kind::DryGrass {
+                assert_eq!(after, before, "{kind:?} should retain its patch density");
+            } else {
+                assert!(
+                    (8.5..=10.0).contains(&ratio),
+                    "{kind:?}: {before} -> {after} ({ratio:.2}x)"
+                );
+            }
         }
     }
 
@@ -564,8 +720,9 @@ mod tests {
                 grow_hangar_plants(&terrain, IVec2::new(x, z), &mut sites);
             }
         }
-        let old_count = sites.len();
-        let sites: Vec<_> = expand_patches(&terrain, &sites, true).collect();
+        let baseline: Vec<_> = expand_patches(&terrain, &sites, true, 1).collect();
+        let sites: Vec<_> =
+            expand_patches(&terrain, &sites, true, DENSE_PATCH_MULTIPLIER).collect();
         for site in &sites {
             let at = site.pose.translation;
             let offset = at.xz() - Vec2::from(BASE);
@@ -576,12 +733,14 @@ mod tests {
             count[site.kind as usize] += 1;
             rear += usize::from(offset.y < -44.0);
         }
+        let baseline_count = baseline.len();
         assert!(
-            (old_count * 9..=old_count * 10).contains(&sites.len()),
-            "{count:?}"
+            (baseline_count * 8..=baseline_count * 10).contains(&sites.len()),
+            "{baseline_count} -> {}: {count:?}",
+            sites.len()
         );
         assert!(rear > sites.len() / 2);
-        assert!(count[Kind::Shrub as usize] + count[Kind::Thornbush as usize] > 230);
+        assert!(count[Kind::Shrub as usize] + count[Kind::Thornbush as usize] > 2_000);
         assert!(count.into_iter().all(|n| n >= 45), "{count:?}");
     }
 
@@ -626,7 +785,7 @@ mod tests {
             assert!(
                 positions
                     .iter()
-                    .all(|&[x, _, z]| { x.abs().max(z.abs()) < BATCH_SIZE * 0.5 + 6.0 })
+                    .all(|&[x, _, z]| { x.abs().max(z.abs()) < BATCH_SIZE * 0.5 + 14.0 })
             );
             triangles += mesh.indices().unwrap().len() / 3;
             batches += 1;

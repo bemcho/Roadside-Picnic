@@ -231,6 +231,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
+            .init_asset::<bevy::world_serialization::WorldAsset>()
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
                 100,
             )))

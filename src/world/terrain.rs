@@ -237,7 +237,7 @@ impl Terrain {
     }
 
     /// 1.0 on the road centerline, 0.0 away from it.
-    pub(super) fn road_mask(&self, x: f32, z: f32) -> f32 {
+    pub(crate) fn road_mask(&self, x: f32, z: f32) -> f32 {
         self.roads
             .sample(Vec2::new(x, z))
             .map_or(0.0, |road| road.mask())

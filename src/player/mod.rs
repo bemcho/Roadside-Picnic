@@ -16,7 +16,10 @@ use bevy::prelude::*;
 
 use crate::assets::STALKER_MODEL;
 use crate::states::{AppState, InGamePhase};
-use crate::world::{Body, Collider, SPAWN, TERRAIN_HALF_SIZE, Terrain, push_out};
+use crate::world::{
+    Body, CAMERA_FAR, Collider, SPAWN, TERRAIN_HALF_SIZE, Terrain, camera_distance_fog, camera_fog,
+    push_out,
+};
 
 pub(crate) use animation::Gait;
 use animation::{
@@ -168,9 +171,11 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
         SpatialListener::new(0.85),
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
-            far: 2700.0,
+            far: CAMERA_FAR,
             ..default()
         }),
+        camera_fog(),
+        camera_distance_fog(),
         Transform::from_translation(focus + orbit.offset()).looking_at(focus, Vec3::Y),
         orbit,
         AtmosphereSettings::default(),
