@@ -214,7 +214,7 @@ impl Terrain {
 
         // Road: the track is flattened toward a gentle ramp between its ends.
         if let Some(road) = self.roads.sample(Vec2::new(x, z)) {
-            h = lerp(h, road.height, road.mask() * 0.85);
+            h = lerp(h, road.height, road.mask());
         }
         h = wetlands.soil_height(x, z, h);
 

@@ -46,6 +46,10 @@ pub const FLESHDEER: &str = "models/mutants/fleshdeer.glb";
 pub const MUTT: &str = "models/mutants/mutt.glb";
 pub const BASE_HANGAR: &str = "models/base/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/base/armored_vehicle.glb";
+pub const VEHICLE_CRAWLER: &str = "models/vehicles/vehicle-crawler.glb";
+pub const VEHICLE_QUARRY: &str = "models/vehicles/vehicle-quarry.glb";
+pub const VEHICLE_SEDAN: &str = "models/vehicles/vehicle-sedan.glb";
+pub const VEHICLE_TRAIN: &str = "models/vehicles/vehicle-train.glb";
 pub const SITE_CORDON_WALL: &str = "models/sites/site-cordon-wall.glb";
 pub const SITE_CHECKPOINT: &str = "models/sites/site-checkpoint.glb";
 pub const HANGAR_LAB: &str = "models/base/props/lab.glb";
@@ -55,6 +59,22 @@ pub const HANGAR_TABLE: &str = "models/base/props/table.glb";
 pub const HANGAR_TOILET: &str = "models/base/props/toilet.glb";
 pub const HANGAR_TOOLS: &str = "models/base/props/tools.glb";
 pub const HANGAR_WORKSHOP: &str = "models/base/props/workshop.glb";
+pub const ARTIFACTS: [&str; 14] = [
+    "models/artifacts/artifact-death-lamp.glb",
+    "models/artifacts/artifact-golden-sphere.glb",
+    "models/artifacts/artifact-itcher.glb",
+    "models/artifacts/artifact-lobster-eyes.glb",
+    "models/artifacts/artifact-spinning-ring.glb",
+    "models/artifacts/artifact-sponge.glb",
+    "models/artifacts/artifact-white-ring.glb",
+    "models/artifacts/artifact-wriggling-magnet.glb",
+    "models/artifacts/blackspark.glb",
+    "models/artifacts/bracelet.glb",
+    "models/artifacts/empty.glb",
+    "models/artifacts/fullempty.glb",
+    "models/artifacts/pinsneedles.glb",
+    "models/artifacts/soso.glb",
+];
 
 /// Root folder for textures and materials.
 #[expect(dead_code)]
@@ -86,6 +106,10 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         HANGAR_TOILET,
         HANGAR_TOOLS,
         HANGAR_WORKSHOP,
+        VEHICLE_CRAWLER,
+        VEHICLE_QUARRY,
+        VEHICLE_SEDAN,
+        VEHICLE_TRAIN,
     ];
     let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
     let data_maps = [
@@ -95,6 +119,11 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_EARTH_SURFACE,
     ];
     assets.0.extend(scenes.map(|path| {
+        server
+            .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
+            .untyped()
+    }));
+    assets.0.extend(ARTIFACTS.map(|path| {
         server
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
             .untyped()

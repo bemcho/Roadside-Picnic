@@ -1,5 +1,6 @@
 //! The stalkers' hangar, furniture, parked vehicle, and interior lighting.
 
+mod artifacts;
 mod props;
 
 use std::sync::LazyLock;
@@ -7,17 +8,64 @@ use std::sync::LazyLock;
 use bevy::light::{EnvironmentMapLight, LightProbe};
 use bevy::prelude::*;
 
-use crate::assets::BASE_HANGAR;
+use crate::assets::{self, BASE_HANGAR};
 use crate::player::vehicle::{parked_vehicle, spawn_vehicle};
 
 use super::WorldRoot;
 use super::collision::{Collider, Pillar};
 use super::terrain::{BASE, Terrain};
 
+pub(super) use artifacts::animate_artifacts;
+
 const MODEL_SCALE: f32 = 38.0;
 const FLOOR_DATUM: f32 = 0.0217;
 const DOOR_Z: f32 = 0.375;
 const DOOR_HALF_WIDTH: f32 = 0.294;
+
+struct YardVehicle {
+    name: &'static str,
+    path: &'static str,
+    center: Vec2,
+    scale: f32,
+    yaw: f32,
+    pillars: &'static [Pillar],
+}
+
+#[allow(clippy::approx_constant, reason = "Measured model coordinates")]
+const YARD_VEHICLES: &[YardVehicle] = &[
+    YardVehicle {
+        name: "Parked freight train",
+        path: assets::VEHICLE_TRAIN,
+        center: Vec2::new(20.0, -162.0),
+        scale: 40.0,
+        yaw: 0.0,
+        pillars: include!("pillars/vehicle_train.rs"),
+    },
+    YardVehicle {
+        name: "Tracked crawler",
+        path: assets::VEHICLE_CRAWLER,
+        center: Vec2::new(55.0, -162.0),
+        scale: 8.0,
+        yaw: 0.03,
+        pillars: include!("pillars/vehicle_crawler.rs"),
+    },
+    YardVehicle {
+        name: "Quarry vehicle",
+        path: assets::VEHICLE_QUARRY,
+        center: Vec2::new(69.0, -162.0),
+        scale: 9.0,
+        yaw: -0.05,
+        pillars: include!("pillars/vehicle_quarry.rs"),
+    },
+    YardVehicle {
+        name: "Sedan",
+        path: assets::VEHICLE_SEDAN,
+        center: Vec2::new(82.0, -162.0),
+        scale: 6.0,
+        yaw: -0.08,
+        pillars: include!("pillars/vehicle_sedan.rs"),
+    },
+];
 
 /// Inner and outer steel faces measured from the GLB in model units.
 static WALLS: LazyLock<Vec<Pillar>> = LazyLock::new(|| {
@@ -98,9 +146,33 @@ pub(super) fn spawn_base(
         &mut materials,
     );
     commands.entity(vehicle).insert(WorldRoot);
+    spawn_yard_vehicles(&mut commands, &server, &terrain);
     props::spawn_hangar_props(&mut commands, hall, &server, &mut meshes, &mut materials);
+    artifacts::spawn_artifact_showcase(&mut commands, hall, &server, &mut meshes, &mut materials);
     spawn_hall_probe(&mut commands, hall, &mut images);
     spawn_lamps(&mut commands, hall, &mut meshes, &mut materials);
+}
+
+fn spawn_yard_vehicles(commands: &mut Commands, server: &AssetServer, terrain: &Terrain) {
+    for vehicle in YARD_VEHICLES {
+        commands.spawn((
+            WorldRoot,
+            Name::new(vehicle.name),
+            WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(vehicle.path))),
+            yard_vehicle_pose(terrain, vehicle),
+            Collider(vehicle.pillars),
+        ));
+    }
+}
+
+fn yard_vehicle_pose(terrain: &Terrain, vehicle: &YardVehicle) -> Transform {
+    Transform::from_xyz(
+        vehicle.center.x,
+        terrain.mesh_height_at(vehicle.center),
+        vehicle.center.y,
+    )
+    .with_rotation(Quat::from_rotation_y(vehicle.yaw))
+    .with_scale(Vec3::splat(vehicle.scale))
 }
 
 fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<Image>) {
@@ -191,6 +263,7 @@ fn spawn_lamps(
 mod tests {
     use super::*;
     use crate::player::vehicle::{blocked, vehicle_distance};
+    use crate::world::cordon::inside_yard;
     use crate::world::{Body, SPAWN, push_out};
 
     #[test]
@@ -218,10 +291,55 @@ mod tests {
     }
 
     #[test]
+    fn supplied_vehicles_are_grounded_behind_hangar_without_blocking_its_gate() {
+        let terrain = Terrain::new();
+        let back = BASE.1 - 0.476 * MODEL_SCALE;
+        let extents = [
+            Vec2::new(0.50, 0.11),
+            Vec2::new(0.50, 0.391),
+            Vec2::new(0.50, 0.221),
+            Vec2::new(0.50, 0.221),
+        ];
+        for (i, (vehicle, extent)) in YARD_VEHICLES.iter().zip(extents).enumerate() {
+            let pose = yard_vehicle_pose(&terrain, vehicle);
+            assert!(inside_yard(vehicle.center));
+            assert!(vehicle.center.y < back - 12.0);
+            assert!(!vehicle.pillars.is_empty());
+            let origin = terrain.mesh_height_at(vehicle.center);
+            for x in [-extent.x, extent.x] {
+                for z in [-extent.y, extent.y] {
+                    let point = pose.transform_point(Vec3::new(x, 0.0, z));
+                    assert!(inside_yard(point.xz()));
+                    assert!(point.z < back - 3.0);
+                    assert!(
+                        (terrain.mesh_height_at(point.xz()) - origin).abs() < 0.05,
+                        "{:?} slopes under {}",
+                        point.xz(),
+                        vehicle.name
+                    );
+                }
+            }
+            for (other, other_extent) in YARD_VEHICLES[..i].iter().zip(extents[..i].iter().copied())
+            {
+                assert!(
+                    (other.center - vehicle.center).abs().x
+                        > other.scale * other_extent.x + vehicle.scale * extent.x + 2.0
+                );
+            }
+        }
+        assert!(
+            YARD_VEHICLES
+                .iter()
+                .all(|vehicle| vehicle.center.distance(Vec2::new(BASE.0, BASE.1 + 60.0)) > 50.0)
+        );
+    }
+
+    #[test]
     fn player_spawn_and_vehicle_route_clear_the_furnished_hangar() {
         let fixtures: Vec<_> = [(Collider(WALLS.as_slice()), GlobalTransform::IDENTITY)]
             .into_iter()
             .chain(props::colliders())
+            .chain(artifacts::colliders())
             .collect();
         let obstacles = || fixtures.iter().map(|(collider, pose)| (collider, pose));
         let mut vehicle = parked_vehicle(Vec3::ZERO);

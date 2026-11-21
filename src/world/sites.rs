@@ -1,5 +1,7 @@
 //! Grounded, roadside landmarks distributed across the Zone.
 
+use std::f32::consts::FRAC_PI_2;
+
 use bevy::gltf::GltfMaterial;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
@@ -21,6 +23,11 @@ enum Kind {
     Schoolhouse,
     Silos,
     Substation,
+    CraterAmphitheater,
+    LandmarkPlagueQuarter,
+    QuarryPit,
+    Roundhouse,
+    LandmarkSubstation,
 }
 
 macro_rules! model {
@@ -31,6 +38,20 @@ macro_rules! model {
             scale: $scale,
             datum: $datum,
             front: $front,
+            front_angle: 0.0,
+        }
+    };
+}
+
+macro_rules! landmark_model {
+    ($name:literal, $file:literal, $scale:literal, $datum:literal, $front:literal) => {
+        Model {
+            name: $name,
+            path: concat!("models/landmarks/landmark-", $file, ".glb"),
+            scale: $scale,
+            datum: $datum,
+            front: $front,
+            front_angle: FRAC_PI_2,
         }
     };
 }
@@ -41,9 +62,24 @@ struct Model {
     scale: f32,
     datum: f32,
     front: f32,
+    front_angle: f32,
 }
 
-const MODELS: [Model; 8] = [
+#[cfg(test)]
+const SITE_PLACEMENT_COUNT: usize = 16;
+#[cfg(test)]
+const SUPPLIED_LANDMARK_COUNT: usize = 5;
+
+const TRAIN_SCALE: f32 = 40.0;
+const TRAIN_PAD: f32 = 32.0;
+const DERAILED_RAIL_CENTER: Vec2 = Vec2::new(1420.0, -980.0);
+const DERAILED_RAIL_JUNCTION: Vec2 = roads::SOUTH_CEMETERY;
+const DERAILED_TRAIN_CENTER: Vec2 = Vec2::new(1436.5, -987.1);
+const TRAIN_YAW_OFFSET: f32 = 0.18;
+const TRAIN_ROLL: f32 = 0.10;
+const TRAIN_LIFT: f32 = 0.45;
+
+const MODELS: [Model; 13] = [
     model!("Brick factory", "brick-factory", 24.0, 0.008, 0.39),
     model!("Cemetery", "cemetery", 3.2, 0.008, 0.20),
     model!("Garage", "garage", 11.0, 0.155, 0.49),
@@ -58,6 +94,23 @@ const MODELS: [Model; 8] = [
     model!("Schoolhouse", "schoolhouse", 11.5, 0.103, 0.402),
     model!("Silos", "silos", 18.0, 0.017, 0.453),
     model!("Substation", "substation", 8.0, 0.016, 0.401),
+    landmark_model!(
+        "Crater amphitheater",
+        "crater-amphitheater",
+        42.0,
+        0.0,
+        0.50
+    ),
+    landmark_model!(
+        "Plague quarter landmark",
+        "plague-quarter",
+        34.0,
+        0.0,
+        0.234
+    ),
+    landmark_model!("Quarry pit", "quarry-pit", 48.0, 0.0, 0.50),
+    landmark_model!("Roundhouse", "roundhouse", 34.0, 0.0, 0.362),
+    landmark_model!("Abandoned substation", "substation", 24.0, 0.0, 0.406),
 ];
 
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
@@ -70,7 +123,14 @@ const PILLARS: [&[Pillar]; MODELS.len()] = [
     include!("pillars/site_schoolhouse.rs"),
     include!("pillars/site_silos.rs"),
     include!("pillars/site_substation.rs"),
+    include!("pillars/landmark_crater_amphitheater.rs"),
+    include!("pillars/landmark_plague_quarter.rs"),
+    include!("pillars/landmark_quarry_pit.rs"),
+    include!("pillars/landmark_roundhouse.rs"),
+    include!("pillars/landmark_substation.rs"),
 ];
+
+const TRAIN_PILLARS: &[Pillar] = include!("pillars/vehicle_train.rs");
 
 #[derive(Clone, Copy)]
 pub(super) struct Landmark {
@@ -113,12 +173,14 @@ impl Landmark {
             terrain.mesh_height_at(self.center) - self.model().datum * scale,
             self.center.y,
         )
-        .with_rotation(Quat::from_rotation_y(-facing.y.atan2(facing.x)))
+        .with_rotation(Quat::from_rotation_y(
+            self.model().front_angle - facing.y.atan2(facing.x),
+        ))
         .with_scale(Vec3::splat(scale))
     }
 }
 
-pub(super) const LANDMARKS: [Landmark; 16] = [
+pub(super) const LANDMARKS: [Landmark; 25] = [
     Landmark::new(Kind::Garage, -197.0, -88.0, roads::WEST_GARAGE),
     Landmark::new(Kind::Garage, 440.0, -516.0, roads::SOUTH_GARAGE),
     Landmark::new(Kind::Silos, 270.0, 114.0, roads::EAST_SILOS),
@@ -135,21 +197,73 @@ pub(super) const LANDMARKS: [Landmark; 16] = [
     Landmark::new(Kind::Schoolhouse, 1195.0, -719.0, roads::SOUTH_SCHOOL),
     Landmark::new(Kind::Substation, 1177.0, 512.0, roads::NORTH_SUBSTATION),
     Landmark::new(Kind::Substation, 250.0, -1320.0, roads::SOUTH_SUBSTATION),
+    // One fixed-seed scatter copy of each supplied landmark. Keeping the
+    // coordinates fixed makes terrain, roads, and streaming deterministic.
+    Landmark::new(
+        Kind::CraterAmphitheater,
+        -1505.0,
+        166.0,
+        roads::WEST_FACTORY,
+    ),
+    Landmark::new(
+        Kind::LandmarkPlagueQuarter,
+        -826.0,
+        -988.0,
+        roads::WEST_RAIL,
+    ),
+    Landmark::new(Kind::QuarryPit, 594.0, 1392.0, roads::NORTH_SILOS),
+    Landmark::new(Kind::Roundhouse, 1392.0, 932.0, roads::NORTH_SILOS),
+    Landmark::new(
+        Kind::LandmarkSubstation,
+        866.0,
+        -1116.0,
+        roads::SOUTH_SCHOOL,
+    ),
+    Landmark::new(Kind::Railway, -1430.0, 1180.0, roads::WEST_CEMETERY),
+    Landmark::new(
+        Kind::Railway,
+        DERAILED_RAIL_CENTER.x,
+        DERAILED_RAIL_CENTER.y,
+        DERAILED_RAIL_JUNCTION,
+    ),
+    Landmark::new(Kind::LandmarkSubstation, -1450.0, -300.0, roads::WEST_RAIL),
+    Landmark::new(
+        Kind::LandmarkSubstation,
+        1460.0,
+        1360.0,
+        roads::NORTHEAST_SUBSTATION,
+    ),
 ];
 
 pub(super) fn foundation(at: Vec2) -> Option<(Vec2, f32)> {
-    LANDMARKS.into_iter().find_map(|site| {
+    let distance = at.distance_squared(DERAILED_TRAIN_CENTER);
+    let outer = TRAIN_PAD + 26.0;
+    let mut foundation = (distance < outer * outer).then(|| {
+        (
+            DERAILED_RAIL_CENTER,
+            smoothstep(outer, TRAIN_PAD, distance.sqrt()),
+        )
+    });
+    for site in LANDMARKS {
         let distance = at.distance_squared(site.center);
         let pad = site.pad();
         let outer = pad + 26.0;
-        (distance < outer * outer).then(|| (site.center, smoothstep(outer, pad, distance.sqrt())))
-    })
+        if distance >= outer * outer {
+            continue;
+        }
+        let weight = smoothstep(outer, pad, distance.sqrt());
+        if foundation.is_none_or(|(_, prior)| weight > prior) {
+            foundation = Some((site.center, weight));
+        }
+    }
+    foundation
 }
 
 pub(super) fn clear_footprint(at: Vec2, clearance: f32) -> bool {
-    LANDMARKS
-        .into_iter()
-        .any(|site| at.distance_squared(site.center) < (site.pad() + clearance).powi(2))
+    at.distance_squared(DERAILED_TRAIN_CENTER) < (TRAIN_PAD + clearance).powi(2)
+        || LANDMARKS
+            .into_iter()
+            .any(|site| at.distance_squared(site.center) < (site.pad() + clearance).powi(2))
 }
 
 pub(super) fn grove(at: Vec2) -> f32 {
@@ -169,6 +283,8 @@ pub(super) fn preload_sites(server: Res<AssetServer>, mut preloaded: ResMut<Prel
         let (mesh, paint) = assets::load_single_primitive(&server, model.path);
         preloaded.0.extend([mesh.untyped(), paint.untyped()]);
     }
+    let (mesh, paint) = assets::load_single_primitive(&server, assets::VEHICLE_TRAIN);
+    preloaded.0.extend([mesh.untyped(), paint.untyped()]);
 }
 
 pub(super) fn spawn_sites(
@@ -197,6 +313,16 @@ pub(super) fn spawn_sites(
             detail_range(385.0, 45.0),
         ));
     }
+    let (mesh, paint) = assets::load_single_primitive(&server, assets::VEHICLE_TRAIN);
+    let paint = paints.get(&paint).expect("preloaded train material");
+    commands.spawn((
+        WorldRoot,
+        Name::new("Derailed train"),
+        Mesh3d(mesh),
+        MeshMaterial3d(materials.add(standard_material_from_gltf_material(paint))),
+        train_pose(&terrain),
+        detail_range(385.0, 45.0),
+    ));
 }
 
 pub(super) fn spawn_solids(parent: &mut ChildSpawnerCommands, terrain: &Terrain, tile: IVec2) {
@@ -205,6 +331,21 @@ pub(super) fn spawn_solids(parent: &mut ChildSpawnerCommands, terrain: &Terrain,
             parent.spawn((site.pose(terrain), Collider(PILLARS[site.kind as usize])));
         }
     }
+    if (DERAILED_TRAIN_CENTER / TILE_SIZE).floor().as_ivec2() == tile {
+        parent.spawn((train_pose(terrain), Collider(TRAIN_PILLARS)));
+    }
+}
+
+fn train_pose(terrain: &Terrain) -> Transform {
+    let track = (DERAILED_RAIL_JUNCTION - DERAILED_RAIL_CENTER).normalize();
+    let yaw = -track.y.atan2(track.x) + TRAIN_YAW_OFFSET;
+    Transform::from_xyz(
+        DERAILED_TRAIN_CENTER.x,
+        terrain.mesh_height_at(DERAILED_TRAIN_CENTER) + TRAIN_LIFT,
+        DERAILED_TRAIN_CENTER.y,
+    )
+    .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(TRAIN_ROLL))
+    .with_scale(Vec3::splat(TRAIN_SCALE))
 }
 
 #[cfg(test)]
@@ -235,8 +376,10 @@ mod tests {
                     let at = pose.transform_point(Vec3::new(x, 0.0, z)).xz();
                     assert!(
                         (terrain.mesh_height_at(at) - origin).abs() < 0.025,
-                        "{:?} pad tilts",
-                        site.kind
+                        "{:?} at {:?} pad tilts: origin {origin}, sample {:?}",
+                        site.kind,
+                        site.center,
+                        at
                     );
                     assert_eq!(
                         terrain.water_depth_at(at.x, at.y),
@@ -249,11 +392,87 @@ mod tests {
             }
             assert!(terrain.road_mask(site.entrance().x, site.entrance().y) > 0.99);
         }
-        assert_eq!(count, [2; MODELS.len()]);
+        assert_eq!(count, [2, 2, 2, 2, 4, 2, 2, 2, 1, 1, 1, 1, 3]);
         assert!(
             quadrants.into_iter().all(|count| count >= 3),
             "{quadrants:?}"
         );
+    }
+
+    #[test]
+    fn supplied_landmarks_are_a_sparse_four_quadrant_scatter() {
+        let added =
+            &LANDMARKS[SITE_PLACEMENT_COUNT..SITE_PLACEMENT_COUNT + SUPPLIED_LANDMARK_COUNT];
+        let mut quadrants = [0; 4];
+        for (i, landmark) in added.iter().enumerate() {
+            assert!(
+                LANDMARKS[..SITE_PLACEMENT_COUNT + i]
+                    .iter()
+                    .all(|other| other.center.distance(landmark.center) >= 400.0),
+                "{:?} is too close to another structure",
+                landmark.kind
+            );
+            assert!(
+                added[..i]
+                    .iter()
+                    .map(|other| (other.center / TILE_SIZE).floor().as_ivec2())
+                    .all(|tile| tile != (landmark.center / TILE_SIZE).floor().as_ivec2())
+            );
+            quadrants[usize::from(landmark.center.x > 0.0)
+                + 2 * usize::from(landmark.center.y > 0.0)] += 1;
+        }
+        assert!(
+            quadrants.into_iter().all(|count| count > 0),
+            "{quadrants:?}"
+        );
+    }
+
+    #[test]
+    fn railway_and_substations_span_distinct_regions() {
+        let railways: Vec<_> = LANDMARKS
+            .iter()
+            .filter(|site| site.kind == Kind::Railway)
+            .collect();
+        assert_eq!(railways.len(), 4);
+        let mut rail_quadrants = [0; 4];
+        for site in railways {
+            rail_quadrants
+                [usize::from(site.center.x > 0.0) + 2 * usize::from(site.center.y > 0.0)] += 1;
+        }
+        assert_eq!(rail_quadrants, [1; 4]);
+
+        let substations: Vec<_> = LANDMARKS
+            .iter()
+            .filter(|site| site.kind == Kind::LandmarkSubstation)
+            .collect();
+        assert_eq!(substations.len(), 3);
+        for (i, station) in substations.iter().enumerate() {
+            assert!(
+                LANDMARKS
+                    .iter()
+                    .filter(|other| other.kind != Kind::LandmarkSubstation)
+                    .all(|other| other.center.distance(station.center) >= 400.0)
+            );
+            assert!(
+                substations[..i]
+                    .iter()
+                    .all(|other| other.center.distance(station.center) >= 400.0)
+            );
+        }
+    }
+
+    #[test]
+    fn the_train_is_grounded_beside_a_level_derailed_railway() {
+        let terrain = Terrain::new();
+        assert!((DERAILED_TRAIN_CENTER.distance(DERAILED_RAIL_CENTER) - 18.0).abs() < 0.1);
+        let (foundation, weight) = super::foundation(DERAILED_TRAIN_CENTER).expect("train pad");
+        assert_eq!(foundation, DERAILED_RAIL_CENTER);
+        assert_eq!(weight, 1.0);
+
+        let pose = train_pose(&terrain);
+        assert!(pose.translation.y > terrain.mesh_height_at(DERAILED_TRAIN_CENTER));
+        assert!(TRAIN_PILLARS.len() > 100);
+        assert!(super::clear_footprint(DERAILED_TRAIN_CENTER, 0.0));
     }
 
     #[test]

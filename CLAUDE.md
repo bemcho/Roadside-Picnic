@@ -106,15 +106,24 @@ The upper-right in-game HUD shows the smoothed frame rate.
   `tools/prepare_plant_asset.py`. Re-sample `src/world/pillars/site_checkpoint.rs`
   with `tools/trim_tree_base.py` after editing the checkpoint geometry.
 - **Sites** (`src/world/sites.rs`): two placements each of the supplied brick
-  factory, cemetery, garage, plague quarter, railway embankment, schoolhouse,
-  silos, and substation. Each roadside approach faces the model's +X entrance.
+  factory, cemetery, garage, plague quarter, schoolhouse, silos, and
+  site-substation. Four railway embankments span the map quadrants, and three
+  landmark-substation copies are isolated across the Zone. The other four
+  supplied landmarks (`assets/models/landmarks/`) each have one sparse copy.
+  The landmark centers are a fixed-seed scatter with at least 400 m separation.
+  A 40 m train is grounded, yawed and listed beside the southeast embankment.
   Level pads keep foundations grounded and scenery clear; collision streams
-  with nearby terrain and landmark groves use the existing canopy budget.
+  with nearby terrain and landmark groves use the existing canopy budget. Site
+  approaches face the model's +X frontage, while the broader supplied landmarks
+  use their +Z frontage.
   Resize their albedo to 1536 px, bake tangents with `--vertex-layout separate`,
   and ground with `tools/prepare_plant_asset.py`. Trim the factory's display
   plane with `tools/trim_tree_base.py` at `0.105` of grounded height before
   final tangents. Use the same tool to sample collision at cut `0`, passing
-  `--split-columns` for the garage so its roof does not block the open bay.
+  `--split-columns` for the garage and landscape landmarks so roofs and
+  overhangs do not fill open bays and sight lines. Supplied vehicles in
+  `assets/models/vehicles/` use the same 1536 px texture, grounding, tangent
+  and split-column collision pipeline.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
@@ -127,6 +136,15 @@ The upper-right in-game HUD shows the smoothed frame rate.
   lands, walks, and takes off again while the frostwolf occasionally chases
   and lunges at the hexadeer. The chameleon stays on its modeled perch.
   Wildlife is decorative and has no collision.
+- **Artifact showcase** (`src/world/base/artifacts.rs`): all 14 supplied
+  artifacts sit on individual lit pedestals in two seven-table rows inside the
+  hangar. The west row stays outside the aisle and the east row hugs the wall,
+  leaving the armored vehicle's diagonal bay route clear. Every artifact keeps
+  a stable rest transform and idly spins, bobs, and sways; display-table
+  colliders remain static. Resize standard artifacts to 1536 px, bake tangents,
+  and ground with `tools/prepare_plant_asset.py`. For the six dense PBR scans,
+  first run glTF Transform `simplify --ratio 0.004 --error 0.008` and then use
+  the same 1536 px/tangent/grounding pipeline.
 - **Mutants** (`src/world/wildlife/mutants.rs`): bovines, chimeras, fleshdeer,
   and mutts occupy dry, biome-weighted patrol pockets across the Zone. Bovines
   give the stalker room; fleshdeer investigate up close; mutts and chimeras
@@ -151,7 +169,10 @@ The upper-right in-game HUD shows the smoothed frame rate.
   --ratio 0.012 --error 0.0035`, `resize --width 1024 --height 1024`, and
   `tangents` (all with `--vertex-layout separate`), then ground them and repair
   tangent seams with `tools/prepare_plant_asset.py`. Keep the central aisle
-  and the parked vehicle's path through the bay clear.
+  and the parked vehicle's path through the bay clear. The crawler, quarry
+  vehicle, sedan, and freight train are grounded in a separated line behind
+  the hangar's south wall, inside the level cordon yard and off the front gate
+  route. Each yard vehicle has static collision sampled from its prepared GLB.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
   independent wheel pivots and a forward spotlight that turns on while occupied.
   The chassis and suspension sample the rendered terrain under the wheels.

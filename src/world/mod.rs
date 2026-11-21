@@ -114,6 +114,7 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PostUpdate,
             (
+                base::animate_artifacts,
                 tree_fall::animate_falling_trees,
                 tree_fall::pick_tree_to_break,
                 tree_fall::break_selected_trees,

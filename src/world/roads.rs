@@ -10,7 +10,7 @@ use super::hydrology::{EAST_FORD_X, FORD_X, WEST_FORD_X};
 use super::sites::LANDMARKS;
 use super::terrain::{BASE, TILE_SIZE, lerp, smoothstep};
 
-const HALF_WIDTH: f32 = 5.0;
+const HALF_WIDTH: f32 = 8.5;
 const SHOULDER: f32 = 11.0;
 const QUARRY_JUNCTION: Vec2 = Vec2::ZERO;
 const BALD_HILL_JUNCTION: Vec2 = Vec2::new(25.0, -33.0);
@@ -39,6 +39,7 @@ pub(super) const NORTH_SCHOOL: Vec2 = Vec2::new(-216.0, 451.0);
 pub(super) const SOUTH_SCHOOL: Vec2 = Vec2::new(1188.0, -665.0);
 pub(super) const NORTH_SUBSTATION: Vec2 = Vec2::new(1110.0, 465.0);
 pub(super) const SOUTH_SUBSTATION: Vec2 = Vec2::new(250.0, -1273.0);
+pub(super) const NORTHEAST_SUBSTATION: Vec2 = Vec2::new(1500.0, 1200.0);
 
 const ROUTES: &[&[Vec2]] = &[
     &[
@@ -173,6 +174,12 @@ const ROUTES: &[&[Vec2]] = &[
         NORTH_RAIL,
         Vec2::new(859.0, 933.0),
         NORTH_SILOS,
+    ],
+    &[
+        Vec2::new(EAST_FORD_X, 415.0),
+        Vec2::new(1350.0, 550.0),
+        Vec2::new(1450.0, 850.0),
+        NORTHEAST_SUBSTATION,
     ],
 ];
 
